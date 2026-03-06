@@ -55,7 +55,7 @@ abnormalities in user workloads.
          │  (parallel schedd queries)   │
          ▼                              ▼
 ┌─────────────────────────────────────────────────────┐
-│              Data Collection Layer                    │
+│         Long-Running Collection Process               │
 │                                                       │
 │  Continuous collection with adaptive pacing.          │
 │  Two polling tiers:                                   │
@@ -66,30 +66,34 @@ abnormalities in user workloads.
 │                                                       │
 │  Classad → Python conversion at the query boundary.   │
 │  No classad objects in application data structures.    │
+│  In-memory time-series rolling buffers.               │
 └────────┬───────────────────────────┬─────────────────┘
          │                           │
          ▼                           ▼
    ┌───────────┐            ┌──────────────┐
    │ JSON files │            │ Time-series   │
-   │ (pre-       │            │ storage       │
-   │  computed)  │            │ (RRD or TBD)  │
-   └─────┬─────┘            └──────┬───────┘
+   │ (pre-       │            │ JSON files    │
+   │  computed   │            │ (periodic     │
+   │  snapshots) │            │  flush from   │
+   └─────┬─────┘            │  memory)      │
+         │                   └──────┬───────┘
          │                          │
          ▼                          ▼
 ┌─────────────────────────────────────────────────────┐
-│                  Web Application                      │
+│             Flask Web Application                     │
 │                                                       │
 │  JSON endpoints — serve pre-computed files            │
-│  Graph endpoints — adaptive pre-render / on-demand    │
-│  HTML endpoints — render templates                    │
+│  Graph endpoints — Matplotlib (adaptive pre-render)   │
+│  HTML endpoints — Jinja2 templates                    │
 │                                                       │
 │  Graph popularity tracking for pre-render decisions   │
 └────────────────────────┬────────────────────────────┘
                          │  HTTPS
                          ▼
                     Web Browser
-              (fixed-geometry layout,
-               freshness indicators)
+              (server-rendered HTML,
+               minimal JS for refresh,
+               fixed-geometry layout)
 ```
 
 ---
@@ -319,26 +323,49 @@ All JSON writes are atomic (write to tmp file, then rename).
 
 ### 5.3 Time-Series Storage
 
-Current system uses RRD files:
-- **Step**: 180 seconds (3 minutes)
-- **Retention**: ~3.5 days at full resolution, ~139 days at 1-hour
-  resolution. This is adequate.
-- **rrdcached**: Unix socket for batched writes
+**In-memory rolling buffers with periodic JSON flush.** No RRD, no
+database, no external daemon.
 
-Standard data sources:
+The collection process (long-running) maintains time-series in memory:
+- Each cycle appends a data point to the relevant buffers
+- Every N cycles, the full buffers are flushed to disk as JSON
+- On startup, buffers are restored from the JSON files
+- If the process crashes, at most a few minutes of data are lost
 
-| Type          | Data Sources                                            |
-|---------------|---------------------------------------------------------|
-| summary.rrd   | Running, Idle, UniquePressure, CpusUse, CpusPending   |
-| {site}.rrd    | Running, MatchingIdle, MaxRunning, CpusUse, CpusPen   |
-| request.rrd   | Running, Idle, HighPrioIdle, LowPrioRun, CpusUse, CpusPending |
-| subtask.rrd   | Running, Idle, CpusUse, CpusPending                   |
-| FAIRSHARE.rrd | ProdCpusUse, AnalCpusUse, ProdRunning, AnalRunning    |
-| UTIL.rrd      | Running, MaxWasRunning, CpusUse, MaxWasCpusUse        |
-| USAGE.rrd     | PartCpusUse, PartCpusFree, StatCpusUse, StatCpusFree  |
+**Two retention tiers:**
+- **Full resolution** (~3.5 days at collection-step intervals): `summary.json`
+- **Downsampled hourly** (~140 days): `summary_history.json`
 
-Decision on whether to replace RRD with a different time-series backend
-(Prometheus, InfluxDB) or keep RRD with better tooling is **open**.
+Downsampling (averaging full-res points into hourly buckets) runs as
+part of the periodic flush.
+
+**File format:**
+```json
+{
+  "step": 180,
+  "updated": 1772820180,
+  "series": {
+    "Running":   [{"t": 1772820000, "v": 45231}, ...],
+    "Idle":      [{"t": 1772820000, "v": 12044}, ...],
+    "CpusInUse": [{"t": 1772820000, "v": 98332}, ...]
+  }
+}
+```
+
+Plain JSON — easy to inspect with `cat`, `jq`, or load in a notebook.
+Matplotlib reads these files directly to render graphs.
+
+**Standard series per type:**
+
+| Type       | Series                                                  |
+|------------|---------------------------------------------------------|
+| summary    | Running, Idle, UniquePressure, CpusUse, CpusPending    |
+| site       | Running, MatchingIdle, MaxRunning, CpusUse, CpusPen    |
+| request    | Running, Idle, HighPrioIdle, LowPrioRun, CpusUse, CpusPending |
+| subtask    | Running, Idle, CpusUse, CpusPending                    |
+| fairshare  | ProdCpusUse, AnalCpusUse, ProdRunning, AnalRunning     |
+| utilization| Running, MaxWasRunning, CpusUse, MaxWasCpusUse         |
+| pilot usage| PartCpusUse, PartCpusFree, StatCpusUse, StatCpusFree   |
 
 ---
 
@@ -368,7 +395,12 @@ Three page types per view:
 - Pilot statistics (totalview)
 - Factory entry status (factoryview)
 
-### 6.2 Graph Serving
+### 6.2 Graph Rendering
+
+**Matplotlib** generates all graphs server-side as PNG images. A custom
+style is defined once (color palette, fonts, transparency, line weights,
+grid style) and applied consistently across all views. Graphs should
+look modern and clean — not like rrdtool output from the 1990s.
 
 **Adaptive pre-rendering:**
 
@@ -383,27 +415,52 @@ Graphs that were popular but stop being requested naturally fall off
 the pre-render list. No cleanup needed.
 
 **Fixed dimensions:** All graph containers have predetermined pixel
-sizes set in the HTML template. Whether the graph is pre-rendered,
-on-demand, or still loading, the space is reserved. No layout shifts.
+sizes set in the HTML template. `<img>` tags have explicit `width` and
+`height` attributes. Whether the graph is pre-rendered, on-demand, or
+still loading, the space is reserved. No layout shifts.
 
-### 6.3 Frontend Principles
+### 6.3 Frontend
 
+**Server-rendered HTML with minimal JavaScript.**
+
+- **Templates**: Jinja2 (Flask built-in)
+- **Graphs**: Server-rendered Matplotlib PNGs, delivered as `<img>` tags
+- **JavaScript**: Minimal — vanilla JS or a small utility library for:
+  - Auto-refresh (periodic reload of data and graph images)
+  - Table sorting and filtering
+  - Data freshness indicator (live-updating age display)
+- **CSS**: Clean, modern styling. No heavy framework required.
+
+No single-page app framework. No heavy charting library. The server
+decides what the page looks like and delivers finished HTML + images.
+JavaScript is glue, not architecture.
+
+**Key principles:**
 - Fixed layout geometry — all containers have known dimensions
 - Data freshness shown on every view with age indicator
-- Auto-refresh on a regular interval
-- Overview pages must load fully from pre-computed data (zero on-demand
-  computation in the critical path)
+- Overview pages load fully from pre-computed data
 - Detail pages may have on-demand elements with acceptable delay
-
-Technology stack (frontend framework, charting library, template engine)
-is **open**. Key constraints:
-- Must not be heavy on client resources (memory, CPU)
-- Server-side rendering is preferred for primary views
-- If client-side charting is used, it must be a lightweight library
+- Light on client resources — no multi-megabyte JS bundles
 
 ---
 
-## 7. Configuration
+## 7. Technology Stack
+
+| Layer              | Choice                | Rationale                                    |
+|--------------------|-----------------------|----------------------------------------------|
+| Language           | Python 3              | HTCondor bindings, team expertise             |
+| Web framework      | Flask                 | Simple, fits a mostly-static-file app         |
+| Template engine    | Jinja2                | Comes with Flask, well-documented             |
+| Graph rendering    | Matplotlib            | Publication-quality server-side PNGs          |
+| Time-series storage| In-memory + JSON flush| No external dependencies, easy to debug       |
+| Snapshot storage   | JSON files            | Pre-computed, atomic writes, trivially inspectable |
+| Frontend JS        | Vanilla / minimal     | Auto-refresh, table sort, freshness display   |
+| Authentication     | CERN SSO (OpenID Connect) | Existing infrastructure                  |
+| Process model      | Long-running collector + Flask app | Not cron — adaptive pacing        |
+
+---
+
+## 8. Configuration
 
 INI format (`/etc/gwmsmon2.conf`):
 
@@ -433,7 +490,7 @@ timespan = 31
 
 ---
 
-## 8. Operational Requirements
+## 9. Operational Requirements
 
 ### Security
 - Run all components as an unprivileged service account. No root.
@@ -461,23 +518,20 @@ The boundary between the two is the classad-to-Python conversion layer.
 
 ---
 
-## 9. Open Questions
+## 10. Open Questions
 
 | # | Topic | Notes |
 |---|-------|-------|
-| 1 | Server-side vs client-side graph rendering | Server-side is always fast and predictable. Client-side can be lightweight but has bad examples. May use hybrid: server for primary, client for detail. |
-| 2 | Consolidate update scripts into shared library vs single process | Shared library = independent failure domains. Single process = less overhead. Either way, common logic must be factored out. |
-| 3 | Priority as universal dimension vs prodview-specific | Only prodview uses priority blocks meaningfully. Others hardcode it. |
-| 4 | site_summary.json content | Currently 24MB with per-pilot debug data. May need summary vs detail split. |
-| 5 | Frontend technology stack | Framework, charting library, template engine all TBD. Must be lightweight on client. |
-| 6 | Containerization | Good for deployment, but need to sort out persistent state (JSON/RRD files, htcondor module access). |
-| 7 | Time-series backend | Keep RRD with better tooling, or replace with Prometheus/InfluxDB? |
-| 8 | HTCondor push/callbacks | Can we subscribe to changes instead of polling? To be investigated with HTCondor team. |
-| 9 | Parallel schedd queries — collector impact | Querying schedds in parallel should be safe (separate daemons on separate machines) but need to confirm no collector contention. |
+| 1 | Consolidate update scripts into shared library vs single process | Shared library = independent failure domains. Single process = less overhead. Either way, common logic must be factored out. |
+| 2 | Priority as universal dimension vs prodview-specific | Only prodview uses priority blocks meaningfully. Others hardcode it. |
+| 3 | site_summary.json content | Currently 24MB with per-pilot debug data. May need summary vs detail split. |
+| 4 | Containerization | Good for deployment, but need to sort out persistent state (JSON files, htcondor module access). |
+| 5 | HTCondor push/callbacks | Can we subscribe to changes instead of polling? To be investigated with HTCondor team. |
+| 6 | Parallel schedd queries — collector impact | Querying schedds in parallel should be safe (separate daemons on separate machines) but need to confirm no collector contention. |
 
 ---
 
-## 10. Data Flow Summary
+## 11. Data Flow Summary
 
 ```
 Continuous (adaptive pacing):
@@ -527,9 +581,11 @@ Background:
 | factoryview            | factoryview           | Same concept, update factory URLs |
 | ElasticSearch history  | (dropped)             | Use CMS MonIT if needed         |
 | Python 2.7             | Python 3              | Full rewrite                    |
-| Cheetah templates      | TBD                   | Open question                   |
-| mod_wsgi 3.4           | TBD                   | Open question                   |
-| jQuery + Google Charts | TBD                   | Open question                   |
+| Cheetah templates      | Jinja2                | Flask built-in                  |
+| mod_wsgi 3.4           | Flask                 | Modern, simple                  |
+| jQuery + Google Charts | Minimal vanilla JS    | No heavy frameworks             |
+| rrdtool graphs         | Matplotlib            | Modern, clean visuals           |
+| RRD files + rrdcached  | In-memory + JSON flush| No external daemons, debuggable |
 | Fixed cron intervals   | Adaptive pacing       | Continuous collection           |
 | Sequential schedd queries | Parallel            | Major speedup                   |
 | On-demand graphs only  | Adaptive pre-rendering| Usage-driven                    |

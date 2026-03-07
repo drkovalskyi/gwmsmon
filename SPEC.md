@@ -248,7 +248,56 @@ No per-job queries. Collects:
 - Collector claimed-slot counts
 - Negotiator cycle duration
 
-### 4.5 Job Status Mapping
+### 4.5 Exit Code Collection
+
+Job-level views (prodview, userview) collect exit codes from recently
+completed jobs using `schedd.history()` with the `since` parameter.
+
+**Why `since` matters:** HTCondor stores history most-recent-first.
+Without `since`, `schedd.history()` scans the entire history file
+(~15-17s per schedd regardless of result count). The `since` parameter
+is a *stop condition* — the scan stops as soon as it hits a job older
+than the cutoff. This makes incremental queries fast:
+
+| Query type              | Time (busiest schedd) | Time (all 24 prod schedds, sequential) |
+|-------------------------|-----------------------|----------------------------------------|
+| Full history scan       | ~15s                  | ~6-7 min                               |
+| Since 3 min ago         | ~0.6s                 | ~3s                                    |
+| Since 1 min ago         | ~0.3s                 | <1s                                    |
+
+**Collection pattern:**
+
+1. Track a `last_query_time` watermark per schedd
+2. Each cycle, query `schedd.history()` with
+   `since=CompletionDate < last_query_time`
+3. Projection: `ExitCode`, `WMAgent_RequestName` (or task identifier
+   for userview), `CompletionDate`
+4. Aggregate into rolling exit code counters per workflow/task
+5. Update watermark to current time
+
+This runs alongside the live job queries in the same collection cycle,
+adding ~3s sequential (~1s parallel) — negligible overhead.
+
+**Aggregation:**
+
+Exit codes are accumulated into rolling time windows:
+
+```python
+exit_codes = {
+    "<request_name>": {
+        "<exit_code>": count,  # rolling window (e.g., last hour)
+    }
+}
+```
+
+Flushed to JSON per view: `exit_codes.json` (overall) and
+`{request}/exit_codes.json` (per-workflow).
+
+**Display:** Overview pages show a summary of non-zero exit codes
+(failure rate, top exit codes). Request detail pages show the full
+exit code distribution for that workflow.
+
+### 4.6 Job Status Mapping
 
 | JobStatus | Name      | Tracked in job-level views? |
 |-----------|-----------|-----------------------------|
@@ -306,7 +355,9 @@ Each job-level view produces:
 | `site_summary.json`          | Per-site aggregate metrics              |
 | `{request}/summary.json`     | Per-request subtask breakdown           |
 | `{request}/totals.json`      | Per-request aggregate                   |
+| `{request}/exit_codes.json`  | Exit code distribution for this request |
 | `{site}/summary.json`        | Per-site request breakdown              |
+| `exit_codes.json`            | Overall exit code summary (top codes, failure rate) |
 
 Totalview additionally produces:
 - `poolview/summary.json` — scheduler health + UserSummary
@@ -377,6 +428,7 @@ Three page types per view:
 - Summary numbers: Running, Idle, CpusInUse, CpusPending, RequestCount
 - Summary time-series graphs (hourly/daily/weekly)
 - Sortable, filterable request/workflow table
+- Exit code summary (failure rate, top non-zero exit codes)
 - Site summary table
 - Data freshness indicator
 
@@ -384,7 +436,8 @@ Three page types per view:
 - Subtask breakdown table
 - Site allocation table
 - Time-series graphs (request-level + per-subtask)
-- Task configuration (memory, cpus, walltime, desired sites)
+- Exit code distribution (full breakdown for this workflow)
+- Task configuration (memory, cpus, desired sites)
 
 **Site detail page** (`/{view}/site/{name}`):
 - Workflow list at this site
@@ -577,7 +630,7 @@ Background:
 | totalview              | totalview             | Same concept                    |
 | poolview               | poolview              | Same concept                    |
 | factoryview            | factoryview           | Same concept, update factory URLs |
-| ElasticSearch history  | (dropped)             | Use CMS MonIT if needed         |
+| ElasticSearch history  | (dropped)             | Exit codes now come from schedd.history() directly |
 | Walltime over-use plots| (dropped)             | Jobs are killed anyway, not actionable |
 | Memory over-use plots  | (dropped)             | Not useful for operators        |
 | Python 2.7             | Python 3              | Full rewrite                    |

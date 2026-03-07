@@ -202,8 +202,7 @@ WMAgent_RequestName, WMAgent_SubTaskName, DESIRED_Sites, JobPrio
 
 Status/metric fields:
 ```
-JobStatus, RequestCpus, RequestMemory, MaxWallTimeMins,
-MemoryUsage, EnteredCurrentStatus
+JobStatus, RequestCpus, RequestMemory, EnteredCurrentStatus
 ```
 
 Metadata (displayed, not aggregated):
@@ -212,7 +211,6 @@ MATCH_GLIDEIN_CMSSite, time()
 ```
 
 Special features: Priority blocks (B0–B7) derived from JobPrio thresholds.
-Wall-time and memory over-use tracking.
 
 #### User view (userview)
 
@@ -224,7 +222,7 @@ DESIRED_Sites
 
 Status/metric fields:
 ```
-JobStatus, RequestCpus, RequestMemory, MaxWallTimeMins
+JobStatus, RequestCpus, RequestMemory
 ```
 
 Metadata:
@@ -580,6 +578,8 @@ Background:
 | poolview               | poolview              | Same concept                    |
 | factoryview            | factoryview           | Same concept, update factory URLs |
 | ElasticSearch history  | (dropped)             | Use CMS MonIT if needed         |
+| Walltime over-use plots| (dropped)             | Jobs are killed anyway, not actionable |
+| Memory over-use plots  | (dropped)             | Not useful for operators        |
 | Python 2.7             | Python 3              | Full rewrite                    |
 | Cheetah templates      | Jinja2                | Flask built-in                  |
 | mod_wsgi 3.4           | Flask                 | Modern, simple                  |

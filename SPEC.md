@@ -100,28 +100,31 @@ abnormalities in user workloads.
 
 ## 3. Monitoring Views
 
-Six views, each with its own data directory and URL namespace. All views
-are equal peers in navigation — operators switch freely between them.
+Five views, each with its own data directory and URL namespace. All
+views are equal peers in navigation — operators switch freely between
+them.
 
 | View         | URL prefix        | Content                                           |
 |--------------|-------------------|---------------------------------------------------|
 | Production   | `/prodview`       | WMAgent production workflows by request/subtask   |
 | Analysis     | `/analysisview`   | CRAB analysis workflows (CMS production service)  |
-| User         | `/userview`       | Non-standard workloads (CMSConnect, institutional, other) |
-| Total        | `/totalview`      | Pool-wide aggregation, site utilization, pilot inventory |
+| Global       | `/globalview`     | All schedds — per-user/task breakdown, site utilization, pilot inventory |
 | Pool         | `/poolview`       | Scheduler health, negotiation times               |
 | Factory      | `/factoryview`    | Glidein factory entries, pilot delivery status     |
 
 ### Changes from gwmsmon
 
-**Kept separate**: analysisview stays its own view. CRAB is a CMS
-production service — it has different characteristics and importance
-than ad-hoc user submissions.
+**New globalview** replaces totalview, cmsconnectview, and
+institutionalview. It queries **all schedds** regardless of type and
+shows per-user, per-task information across the entire pool. This
+eliminates the problem where schedds with unknown or changed
+`CMSGWMS_Type` were invisible. Since we already query all schedds
+across the other views, globalview reuses the same data with a
+different aggregation (by user/task instead of by workflow).
 
-**Merged**: The old cmsconnectview and institutionalview are merged
-into a single **userview**. The submission origin (CMSConnect,
-institutional, other) is a filterable attribute, not a separate view.
-This eliminates the gap where unknown application types were invisible.
+**Kept separate**: analysisview stays its own view. CRAB is a CMS
+production service with different characteristics than ad-hoc user
+submissions.
 
 **Dropped**: ElasticSearch history integration (exit codes, runtime
 distributions). Exit codes now collected directly from HTCondor via
@@ -148,12 +151,19 @@ Explicit path prefixes for all entity types — no ambiguous routing:
 
 Three distinct collection patterns:
 
-**Job-level collectors** (prodview, analysisview, userview):
-Query individual job classads from each schedd, aggregate into summaries.
+**Job-level collectors** (prodview, analysisview, globalview):
+Query individual job classads from each schedd, aggregate into
+summaries. Globalview queries **all schedds** — the same ones
+prodview and analysisview query, plus any others (cmsconnect,
+institutional, tier0, unknown types). Since we're hitting all
+schedds anyway, globalview adds no extra pool load — it just
+aggregates the data differently (by user/task).
 
-**Summary collectors** (totalview, poolview):
-Query schedd/pilot/factory summary ads. No per-job queries (except CRAB
-scheduler-universe jobs for UserSummary).
+**Summary collectors** (globalview, poolview):
+Query schedd/pilot/factory summary ads for pool-wide metrics.
+Globalview subsumes the old totalview role: site utilization,
+pilot inventory, fairshare, and scheduler-universe jobs for
+UserSummary.
 
 **Post-processors** (utilization):
 Derive rolling statistics from existing time-series data.
@@ -234,7 +244,11 @@ MATCH_GLIDEIN_CMSSite, QDate, CRAB_UserWebDir, DAG node counts
 
 Queries schedds with `CMSGWMS_Type == "crabschedd"`.
 
-#### User view (userview)
+#### Global (globalview)
+
+Queries **all schedds** regardless of `CMSGWMS_Type`. Two roles:
+
+**Per-user/task aggregation** (like old cmsconnect/institutional views):
 
 Grouping keys:
 ```
@@ -249,29 +263,24 @@ JobStatus, RequestCpus, RequestMemory
 Metadata:
 ```
 MATCH_GLIDEIN_CMSSite, QDate,
-submission origin (derived from CMSGWMS_Type)
+schedd origin (CMSGWMS_Type of the schedd)
 ```
 
-Task identifier fallback chain: Dashboard_TaskId → BLTaskID →
-SubmitFile.
+Task identifier fallback chain: CRAB_ReqName → WMAgent_RequestName →
+Dashboard_TaskId → BLTaskID → SubmitFile.
 
-Origin detection: Derived from schedd's CMSGWMS_Type attribute
-(cmsconnect → CMSConnect, institutionalschedd → Institutional,
-anything else → Other). Excludes crabschedd (handled by analysisview).
-
-#### Totalview
-
-No per-job queries. Collects:
+**Pool-wide summary** (like old totalview):
 - Schedd summary ads (all schedds)
 - CRAB scheduler-universe jobs (JobUniverse == 7) for UserSummary
 - Pilot slot inventory (GLIDEIN_CMSSite, SlotType, CPU/memory/retirement)
 - Factory XML feeds (descript.xml, rrd_Status_Attributes.xml)
 - Collector claimed-slot counts
 - Negotiator cycle duration
+- Fairshare breakdown (production vs analysis vs other)
 
 ### 4.5 Exit Code Collection
 
-Job-level views (prodview, analysisview, userview) collect exit codes
+Job-level views (prodview, analysisview, globalview) collect exit codes
 from recently completed jobs using `schedd.history()` with the `since`
 parameter.
 
@@ -292,8 +301,7 @@ than the cutoff. This makes incremental queries fast:
 1. Track a `last_query_time` watermark per schedd
 2. Each cycle, query `schedd.history()` with
    `since=CompletionDate < last_query_time`
-3. Projection: `ExitCode`, `WMAgent_RequestName` (or task identifier
-   for userview), `CompletionDate`
+3. Projection: `ExitCode`, workflow/task identifier, `CompletionDate`
 4. Aggregate into rolling exit code counters per workflow/task
 5. Update watermark to current time
 
@@ -329,7 +337,7 @@ exit code distribution for that workflow.
 | 4         | Completed | Skipped                     |
 | 5         | Held      | Skipped                     |
 
-Exception: totalview UserSummary tracks all statuses including
+Exception: globalview UserSummary tracks all statuses including
 Held/Completed/Removed for the per-user summary.
 
 ---
@@ -381,9 +389,10 @@ Each job-level view produces:
 | `{site}/summary.json`        | Per-site request breakdown              |
 | `exit_codes.json`            | Overall exit code summary (top codes, failure rate) |
 
-Totalview additionally produces:
+Globalview additionally produces:
 - `poolview/summary.json` — scheduler health + UserSummary
 - `factoryview/fact_entries.json` — factory entry-to-site mapping
+- Pilot inventory and fairshare data (previously in totalview)
 
 Note: The current totalview `site_summary.json` is 24MB because it
 includes per-pilot debug data. **Needs review** — may need to split
@@ -464,8 +473,8 @@ Three page types per view:
 **Site detail page** (`/{view}/site/{name}`):
 - Workflow list at this site
 - Utilization graphs
-- Fairshare breakdown (prodview/totalview)
-- Pilot statistics (totalview)
+- Fairshare breakdown (globalview)
+- Pilot statistics (globalview)
 - Factory entry status (factoryview)
 
 ### 6.2 Graph Rendering
@@ -544,11 +553,8 @@ basedir = /var/www/prodview/
 [analysisview]
 basedir = /var/www/analysisview/
 
-[userview]
-basedir = /var/www/userview/
-
-[totalview]
-basedir = /var/www/totalview/
+[globalview]
+basedir = /var/www/globalview/
 
 [poolview]
 basedir = /var/www/poolview/
@@ -649,10 +655,10 @@ Background:
 | gwmsmon                | gwmsmon2              | Change                          |
 |------------------------|-----------------------|---------------------------------|
 | analysisview           | analysisview          | Kept separate (CRAB is a CMS production service) |
-| cmsconnectview         | userview              | Merged with institutional       |
-| institutionalview      | userview              | Merged with cmsconnect          |
+| cmsconnectview         | globalview            | Absorbed into globalview        |
+| institutionalview      | globalview            | Absorbed into globalview        |
+| totalview              | globalview            | Absorbed into globalview        |
 | prodview               | prodview              | Same concept                    |
-| totalview              | totalview             | Same concept                    |
 | poolview               | poolview              | Same concept                    |
 | factoryview            | factoryview           | Same concept, update factory URLs |
 | ElasticSearch history  | (dropped)             | Exit codes now come from schedd.history() directly |

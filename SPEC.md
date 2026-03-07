@@ -100,29 +100,32 @@ abnormalities in user workloads.
 
 ## 3. Monitoring Views
 
-Five views, each with its own data directory and URL namespace. All views
+Six views, each with its own data directory and URL namespace. All views
 are equal peers in navigation — operators switch freely between them.
 
-| View         | URL prefix      | Content                                           |
-|--------------|-----------------|---------------------------------------------------|
-| Production   | `/prodview`     | WMAgent production workflows by request/subtask   |
-| User         | `/userview`     | All non-production workloads (CRAB, CMSConnect, institutional, other) |
-| Total        | `/totalview`    | Pool-wide aggregation, site utilization, pilot inventory |
-| Pool         | `/poolview`     | Scheduler health, negotiation times               |
-| Factory      | `/factoryview`  | Glidein factory entries, pilot delivery status     |
+| View         | URL prefix        | Content                                           |
+|--------------|-------------------|---------------------------------------------------|
+| Production   | `/prodview`       | WMAgent production workflows by request/subtask   |
+| Analysis     | `/analysisview`   | CRAB analysis workflows (CMS production service)  |
+| User         | `/userview`       | Non-standard workloads (CMSConnect, institutional, other) |
+| Total        | `/totalview`      | Pool-wide aggregation, site utilization, pilot inventory |
+| Pool         | `/poolview`       | Scheduler health, negotiation times               |
+| Factory      | `/factoryview`    | Glidein factory entries, pilot delivery status     |
 
 ### Changes from gwmsmon
 
-**Merged**: The old analysisview, cmsconnectview, and institutionalview
-are merged into a single **userview**. The submission origin (CRAB,
-CMSConnect, institutional, other) is a filterable attribute, not a
-separate view. This eliminates the gap where unknown application types
-were invisible.
+**Kept separate**: analysisview stays its own view. CRAB is a CMS
+production service — it has different characteristics and importance
+than ad-hoc user submissions.
+
+**Merged**: The old cmsconnectview and institutionalview are merged
+into a single **userview**. The submission origin (CMSConnect,
+institutional, other) is a filterable attribute, not a separate view.
+This eliminates the gap where unknown application types were invisible.
 
 **Dropped**: ElasticSearch history integration (exit codes, runtime
-distributions). If historical job data is needed in the future, integrate
-with CMS central monitoring (MonIT/Grafana) rather than a private ES
-instance.
+distributions). Exit codes now collected directly from HTCondor via
+`schedd.history()` (see section 4.5).
 
 ### URL Routing
 
@@ -145,7 +148,7 @@ Explicit path prefixes for all entity types — no ambiguous routing:
 
 Three distinct collection patterns:
 
-**Job-level collectors** (prodview, userview):
+**Job-level collectors** (prodview, analysisview, userview):
 Query individual job classads from each schedd, aggregate into summaries.
 
 **Summary collectors** (totalview, poolview):
@@ -212,12 +215,11 @@ MATCH_GLIDEIN_CMSSite, time()
 
 Special features: Priority blocks (B0–B7) derived from JobPrio thresholds.
 
-#### User view (userview)
+#### Analysis (analysisview)
 
 Grouping keys:
 ```
-CRAB_UserHN (or AccountingGroup for non-CRAB), task identifier,
-DESIRED_Sites
+CRAB_UserHN, CRAB_ReqName, DESIRED_Sites
 ```
 
 Status/metric fields:
@@ -227,16 +229,35 @@ JobStatus, RequestCpus, RequestMemory
 
 Metadata:
 ```
-MATCH_GLIDEIN_CMSSite, QDate, CRAB_UserWebDir, DAG node counts,
+MATCH_GLIDEIN_CMSSite, QDate, CRAB_UserWebDir, DAG node counts
+```
+
+Queries schedds with `CMSGWMS_Type == "crabschedd"`.
+
+#### User view (userview)
+
+Grouping keys:
+```
+AccountingGroup (or user identity), task identifier, DESIRED_Sites
+```
+
+Status/metric fields:
+```
+JobStatus, RequestCpus, RequestMemory
+```
+
+Metadata:
+```
+MATCH_GLIDEIN_CMSSite, QDate,
 submission origin (derived from CMSGWMS_Type)
 ```
 
-Task identifier fallback chain: CRAB_ReqName → Dashboard_TaskId →
-BLTaskID → SubmitFile.
+Task identifier fallback chain: Dashboard_TaskId → BLTaskID →
+SubmitFile.
 
 Origin detection: Derived from schedd's CMSGWMS_Type attribute
-(crabschedd → CRAB, cmsconnect → CMSConnect, institutionalschedd →
-Institutional, anything else → Other).
+(cmsconnect → CMSConnect, institutionalschedd → Institutional,
+anything else → Other). Excludes crabschedd (handled by analysisview).
 
 #### Totalview
 
@@ -250,8 +271,9 @@ No per-job queries. Collects:
 
 ### 4.5 Exit Code Collection
 
-Job-level views (prodview, userview) collect exit codes from recently
-completed jobs using `schedd.history()` with the `since` parameter.
+Job-level views (prodview, analysisview, userview) collect exit codes
+from recently completed jobs using `schedd.history()` with the `since`
+parameter.
 
 **Why `since` matters:** HTCondor stores history most-recent-first.
 Without `since`, `schedd.history()` scans the entire history file
@@ -519,6 +541,9 @@ INI format (`/etc/gwmsmon2.conf`):
 [prodview]
 basedir = /var/www/prodview/
 
+[analysisview]
+basedir = /var/www/analysisview/
+
 [userview]
 basedir = /var/www/userview/
 
@@ -623,9 +648,9 @@ Background:
 
 | gwmsmon                | gwmsmon2              | Change                          |
 |------------------------|-----------------------|---------------------------------|
-| analysisview           | userview              | Merged with cmsconnect + institutional |
-| cmsconnectview         | userview              | Merged                          |
-| institutionalview      | userview              | Merged                          |
+| analysisview           | analysisview          | Kept separate (CRAB is a CMS production service) |
+| cmsconnectview         | userview              | Merged with institutional       |
+| institutionalview      | userview              | Merged with cmsconnect          |
 | prodview               | prodview              | Same concept                    |
 | totalview              | totalview             | Same concept                    |
 | poolview               | poolview              | Same concept                    |

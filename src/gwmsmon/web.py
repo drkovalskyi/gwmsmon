@@ -125,6 +125,12 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
     def overview(view):
         if view not in VIEWS:
             abort(404)
+
+        if view == "poolview":
+            return _poolview_overview(cfg)
+        if view == "factoryview":
+            return _factoryview_overview(cfg)
+
         view_cfg = VIEWS[view]
         basedir = cfg.get(view, "basedir")
 
@@ -199,10 +205,10 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             abort(404)
 
         subtasks = workflows[name]
-        exit_codes = _annotate_exit_codes(_load_json(
-            os.path.join(basedir, name.replace("/", os.sep)),
-            "exit_codes.json",
-        ))
+        req_dir = os.path.join(basedir, name.replace("/", os.sep))
+        exit_codes = _annotate_exit_codes(
+            _load_json(req_dir, "exit_codes.json"))
+        detail = _load_json(req_dir, "detail.json")
 
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
@@ -214,6 +220,13 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             for k in req_totals:
                 req_totals[k] += st_data.get(k, 0)
 
+        # Site breakdown from detail.json
+        sites = detail.get("sites", {})
+        sorted_sites = sorted(
+            sites.items(),
+            key=lambda x: -x[1].get("Running", 0),
+        )
+
         return render_template(
             "request.html",
             view=view,
@@ -222,6 +235,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             subtasks=subtasks,
             req_totals=req_totals,
             exit_codes=exit_codes,
+            sites=sorted_sites,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,
@@ -268,6 +282,8 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
 
     @app.route("/<view>/site/<name>")
     def site_detail(view, name):
+        if view == "factoryview":
+            return _factoryview_site_detail(cfg, name)
         if view not in VIEWS or VIEWS[view].get("overview_only"):
             abort(404)
         basedir = cfg.get(view, "basedir")
@@ -291,6 +307,85 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             updated_ts=updated,
         )
 
+    @app.route("/<view>/completed")
+    def completed_overview(view):
+        """All completed jobs — same as exitcode detail with no filter."""
+        return _exitcode_view(view, None)
+
+    @app.route("/<view>/exitcode/<code>")
+    def exitcode_detail(view, code):
+        """Completed jobs filtered to a specific exit code."""
+        return _exitcode_view(view, code)
+
+    def _exitcode_view(view, code):
+        if view not in VIEWS or VIEWS[view].get("overview_only"):
+            abort(404)
+        basedir = cfg.get(view, "basedir")
+        ec_dir = os.path.join(basedir, "_exitcodes")
+
+        if code is None:
+            detail = _load_json(ec_dir, "_all.json")
+            title = "Completed Jobs"
+            desc = ""
+        else:
+            safe_code = code.replace(":", "_")
+            detail = _load_json(ec_dir, "{}.json".format(safe_code))
+            title = "Exit Code {}".format(code)
+            desc = _describe_exit_code(code)
+
+        if not detail:
+            abort(404)
+
+        total_count = detail.get("total", 0)
+        wf_totals = detail.get("wf_totals", {})
+        wf_failures = detail.get("wf_failures", {})
+
+        workflows = []
+        for wf, count in detail.get("workflows", {}).items():
+            wf_total = wf_totals.get(wf, 0)
+            wf_fail = wf_failures.get(wf, 0) if code is None else count
+            workflows.append({
+                "name": wf,
+                "count": count,
+                "total": wf_total,
+                "failures": wf_fail,
+                "rate": (round(wf_fail / wf_total * 100, 1)
+                         if wf_total else 0),
+            })
+        workflows.sort(key=lambda x: -x["count"])
+
+        sites = sorted(
+            [{"name": k, "count": v}
+             for k, v in detail.get("sites", {}).items()],
+            key=lambda x: -x["count"],
+        )
+        users = sorted(
+            [{"name": k, "count": v}
+             for k, v in detail.get("users", {}).items()],
+            key=lambda x: -x["count"],
+        )
+
+        summary = _load_json(basedir, "summary.json")
+        updated = summary.get("updated", 0)
+        overall_failures = detail.get("failures", 0)
+
+        return render_template(
+            "exitcode.html",
+            view=view,
+            view_cfg=VIEWS[view],
+            code=code,
+            title=title,
+            desc=desc,
+            total_count=total_count,
+            total_failures=overall_failures,
+            workflows=workflows,
+            sites=sites,
+            users=users,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
+
     # --- Timeseries JSON endpoint ---
 
     @app.route("/<view>/tsdata/<path:entity>")
@@ -304,7 +399,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         kind = parts[0]
         if kind == "summary":
             filename = "_summary.json"
-        elif kind in ("request", "site") and len(parts) == 2:
+        elif kind in ("request", "site", "schedd") and len(parts) == 2:
             safe = parts[1].replace("/", "_")
             filename = "{}_{}.json".format(kind, safe)
         else:
@@ -348,6 +443,92 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
                         headers={"Cache-Control": "max-age=120, public"})
 
     return app
+
+
+def _poolview_overview(cfg):
+    basedir = cfg.get("poolview", "basedir")
+    summary = _load_json(basedir, "summary.json")
+    updated = summary.get("updated", 0)
+
+    schedds = summary.get("schedds", {})
+    sorted_schedds = sorted(
+        schedds.items(),
+        key=lambda x: -x[1].get("TotalRunningJobs", 0),
+    )
+
+    user_summary = summary.get("user_summary", {})
+    sorted_users = sorted(
+        user_summary.items(),
+        key=lambda x: -x[1].get("Running", 0),
+    )
+
+    return render_template(
+        "poolview.html",
+        view="poolview",
+        view_cfg=VIEWS["poolview"],
+        totals=summary.get("totals", {}),
+        schedds=sorted_schedds,
+        user_summary=sorted_users,
+        updated=updated,
+        freshness=_freshness(updated),
+        updated_ts=updated,
+    )
+
+
+def _factoryview_overview(cfg):
+    basedir = cfg.get("factoryview", "basedir")
+    summary = _load_json(basedir, "summary.json")
+    totals_data = _load_json(basedir, "totals.json")
+    updated = summary.get("updated", 0)
+
+    sites = totals_data.get("sites", {})
+    sorted_sites = sorted(
+        sites.items(),
+        key=lambda x: -x[1].get("Running", 0),
+    )
+
+    return render_template(
+        "factoryview.html",
+        view="factoryview",
+        view_cfg=VIEWS["factoryview"],
+        totals=summary.get("totals", totals_data.get("totals", {})),
+        sites=sorted_sites,
+        errors=summary.get("errors", []),
+        updated=updated,
+        freshness=_freshness(updated),
+        updated_ts=updated,
+    )
+
+
+def _factoryview_site_detail(cfg, name):
+    basedir = cfg.get("factoryview", "basedir")
+    site_dir = os.path.join(basedir, name)
+    site_data = _load_json(site_dir, "summary.json")
+    if not site_data:
+        abort(404)
+
+    entries = site_data.get("entries", {})
+    sorted_entries = sorted(
+        entries.items(),
+        key=lambda x: -sum(
+            fd.get("running", 0) for fd in x[1].values()
+        ),
+    )
+
+    summary = _load_json(basedir, "summary.json")
+    updated = summary.get("updated", 0)
+
+    return render_template(
+        "factoryview_site.html",
+        view="factoryview",
+        view_cfg=VIEWS["factoryview"],
+        site_name=name,
+        site_data=site_data,
+        entries=sorted_entries,
+        updated=updated,
+        freshness=_freshness(updated),
+        updated_ts=updated,
+    )
 
 
 def _subtask_total(subtasks, key):

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Factory — gwmsmon{% endblock %}
+{% block content %}
+<h1>Factory Overview</h1>
+
+<div class="stats-row">
+  <div class="stat">
+    <div class="stat-value">{{ totals.get('Running', 0)|fmt }}</div>
+    <div class="stat-label">Running Pilots</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ totals.get('Idle', 0)|fmt }}</div>
+    <div class="stat-label">Idle Pilots</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ totals.get('Held', 0)|fmt }}</div>
+    <div class="stat-label">Held Pilots</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ totals.get('Sites', 0)|fmt }}</div>
+    <div class="stat-label">Sites</div>
+  </div>
+  {% if errors %}
+  <div class="stat">
+    <div class="stat-value warn">{{ errors|length }}</div>
+    <div class="stat-label">Fetch Errors</div>
+  </div>
+  {% endif %}
+</div>
+
+{% if errors %}
+<div class="error-banner">
+  <strong>Factory fetch errors:</strong>
+  {% for e in errors %}
+  <div>{{ e.factory }}: {{ e.error }}</div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="graphs-row">
+  <div class="chart" data-src="/factoryview/tsdata/summary" data-interval="hourly" data-chart-type="simple"></div>
+  <div class="chart" data-src="/factoryview/tsdata/summary" data-interval="daily" data-chart-type="simple"></div>
+  <div class="chart" data-src="/factoryview/tsdata/summary" data-interval="weekly" data-chart-type="simple"></div>
+</div>
+
+<div class="section">
+  <h2>Sites ({{ sites|length }})</h2>
+  <input type="text" class="table-filter" placeholder="Filter..." data-table="sites-table">
+  <div class="table-scroll">
+  <table class="data-table sortable" id="sites-table" data-sort-default="1:desc">
+    <thead>
+      <tr>
+        <th>Site</th>
+        <th data-sort="num">Running</th>
+        <th data-sort="num">Idle</th>
+        <th data-sort="num">Held</th>
+        <th data-sort="num">Entries</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for name, data in sites %}
+    <tr>
+      <td><a href="/factoryview/site/{{ name }}">{{ name }}</a></td>
+      <td>{{ data.get('Running', 0)|fmt }}</td>
+      <td>{{ data.get('Idle', 0)|fmt }}</td>
+      <td>{{ data.get('Held', 0)|fmt }}</td>
+      <td>{{ data.get('Entries', 0)|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

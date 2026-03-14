@@ -20,33 +20,48 @@
 })();
 
 // Table sorting
-document.querySelectorAll('.data-table.sortable th').forEach(function(th) {
-  th.addEventListener('click', function() {
-    var table = th.closest('table');
-    var tbody = table.querySelector('tbody');
-    var idx = Array.from(th.parentNode.children).indexOf(th);
-    var isNum = th.dataset.sort === 'num';
-    var asc = th.classList.contains('sort-asc');
+function sortTable(th, forceDir) {
+  var table = th.closest('table');
+  var tbody = table.querySelector('tbody');
+  var idx = Array.from(th.parentNode.children).indexOf(th);
+  var isNum = th.dataset.sort === 'num';
+  var asc;
+  if (forceDir) {
+    asc = forceDir === 'asc';
+  } else {
+    asc = !th.classList.contains('sort-asc');
+  }
 
-    // Clear other sort indicators
-    table.querySelectorAll('th').forEach(function(h) {
-      h.classList.remove('sort-asc', 'sort-desc');
-    });
-    th.classList.add(asc ? 'sort-desc' : 'sort-asc');
-
-    var rows = Array.from(tbody.querySelectorAll('tr'));
-    rows.sort(function(a, b) {
-      var av = a.children[idx].textContent.trim();
-      var bv = b.children[idx].textContent.trim();
-      if (isNum) {
-        av = parseFloat(av.replace(/,/g, '')) || 0;
-        bv = parseFloat(bv.replace(/,/g, '')) || 0;
-      }
-      var cmp = av < bv ? -1 : av > bv ? 1 : 0;
-      return asc ? -cmp : cmp;
-    });
-    rows.forEach(function(row) { tbody.appendChild(row); });
+  table.querySelectorAll('th').forEach(function(h) {
+    h.classList.remove('sort-asc', 'sort-desc');
   });
+  th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+  rows.sort(function(a, b) {
+    var av = a.children[idx].textContent.trim();
+    var bv = b.children[idx].textContent.trim();
+    if (isNum) {
+      av = parseFloat(av.replace(/,/g, '')) || 0;
+      bv = parseFloat(bv.replace(/,/g, '')) || 0;
+    }
+    var cmp = av < bv ? -1 : av > bv ? 1 : 0;
+    return asc ? cmp : -cmp;
+  });
+  rows.forEach(function(row) { tbody.appendChild(row); });
+}
+
+document.querySelectorAll('.data-table.sortable th').forEach(function(th) {
+  th.addEventListener('click', function() { sortTable(th); });
+});
+
+// Apply default sort (data-sort-default="colIdx:dir", e.g. "2:desc")
+document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(function(table) {
+  var parts = table.dataset.sortDefault.split(':');
+  var colIdx = parseInt(parts[0], 10);
+  var dir = parts[1] || 'desc';
+  var th = table.querySelectorAll('thead th')[colIdx];
+  if (th) sortTable(th, dir);
 });
 
 // Table filtering
@@ -283,13 +298,98 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     return maxR;
   }
 
+  // Simple 3-line chart colors (colorblind-safe)
+  var SIMPLE_COLORS = {
+    Running: '#2166AC',
+    Idle: '#D6604D',
+    Held: '#878787',
+    TotalRunning: '#2166AC',
+    TotalIdle: '#D6604D',
+    TotalHeld: '#878787',
+    TotalRunningJobs: '#2166AC',
+    TotalIdleJobs: '#D6604D',
+    TotalHeldJobs: '#878787',
+  };
+  var SIMPLE_CHART_H = 240;
+
+  function renderSimpleChart(el, series, sharedSimpleYMax) {
+    var interval = INTERVALS[el.dataset.interval] || INTERVALS.hourly;
+
+    var loader = el.querySelector('.chart-loading');
+    if (loader) loader.remove();
+
+    var label = document.createElement('div');
+    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:#444;padding:2px 0 0';
+    label.textContent = el.dataset.interval.charAt(0).toUpperCase() + el.dataset.interval.slice(1);
+    el.appendChild(label);
+
+    var now = Date.now() / 1000;
+    var cutoff = now - interval;
+
+    // Detect series keys (first 3 non-timestamp keys)
+    var seriesKeys = Object.keys(series).slice(0, 3);
+    if (!seriesKeys.length) return;
+
+    var aligned = buildAligned(series, seriesKeys, cutoff);
+    if (!aligned) return;
+
+    var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
+    var yMax = sharedSimpleYMax || alignedCpusMax(1);
+
+    var uSeries = [{}];
+    var dataArrays = [aligned[0]];
+    seriesKeys.forEach(function(k, i) {
+      uSeries.push({
+        scale: 'y',
+        stroke: SIMPLE_COLORS[k] || ['#2166AC','#D6604D','#878787'][i],
+        width: 2,
+        label: k,
+      });
+      dataArrays.push(aligned[i + 1]);
+    });
+
+    var opts = {
+      width: CHART_W,
+      height: SIMPLE_CHART_H,
+      cursor: { show: true },
+      legend: { show: false },
+      padding: [4, 8, 2, LEFT_PAD],
+      plugins: [tooltipPlugin()],
+      scales: {
+        x: { min: cutoff, max: now },
+        y: { min: 0, max: yMax, auto: false },
+      },
+      axes: [
+        { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: '#888' },
+        {
+          scale: 'y',
+          size: 50,
+          font: '10px sans-serif',
+          stroke: '#444',
+          splits: gridSplits,
+          values: function(self, ticks) { return ticks.map(fmtCount); },
+        },
+      ],
+      series: uSeries,
+    };
+
+    new uPlot(opts, dataArrays, el);
+  }
+
   function renderCharts() {
     var charts = document.querySelectorAll('.chart');
     if (!charts.length) return;
 
-    // Add loading indicators
+    // Separate simple and dual-panel charts
+    var simpleCharts = [];
+    var dualCharts = [];
     charts.forEach(function(el) {
       el.innerHTML = '<div class="chart-loading">Loading...</div>';
+      if (el.dataset.chartType === 'simple') {
+        simpleCharts.push(el);
+      } else {
+        dualCharts.push(el);
+      }
     });
 
     // Group by data-src for single fetch
@@ -300,11 +400,9 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
       groups[src].push(el);
     });
 
-    // Compute shared ratio scale across ALL charts on the page.
-    // We need to fetch all data first, then compute a single global max,
-    // then render.
+    // Fetch all data, then render
     var pending = Object.keys(groups).length;
-    var allData = {};  // src -> series
+    var allData = {};
 
     Object.keys(groups).forEach(function(src) {
       fetch(src)
@@ -316,33 +414,63 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
         .finally(function() {
           pending--;
           if (pending === 0) {
-            // Compute page-wide shared ratio max
+            // Compute shared scales for dual-panel charts
             var pageMaxRatio = 0;
-            Object.keys(allData).forEach(function(s) {
-              var mr = globalMaxRatio(allData[s]);
-              if (mr > pageMaxRatio) pageMaxRatio = mr;
-            });
+            var sharedCpusYMax = {};
+            if (dualCharts.length) {
+              Object.keys(allData).forEach(function(s) {
+                // Only include data from dual-panel chart sources
+                var hasDual = groups[s].some(function(el) {
+                  return el.dataset.chartType !== 'simple';
+                });
+                if (!hasDual) return;
+                var mr = globalMaxRatio(allData[s]);
+                if (mr > pageMaxRatio) pageMaxRatio = mr;
+              });
+              PANELS.forEach(function(panel) {
+                var maxV = 0;
+                Object.keys(allData).forEach(function(s) {
+                  var hasDual = groups[s].some(function(el) {
+                    return el.dataset.chartType !== 'simple';
+                  });
+                  if (!hasDual) return;
+                  (allData[s][panel.cpusKey] || []).forEach(function(p) {
+                    if (p.v > maxV) maxV = p.v;
+                  });
+                });
+                sharedCpusYMax[panel.cpusKey] = alignedCpusMax(maxV);
+              });
+            }
             var sharedRatioYMax = alignedRatioMax(pageMaxRatio);
 
-            // Compute per-panel shared CPUs max from ALL data (unfiltered)
-            // so all 3 interval charts use the same left y-axis range
-            var sharedCpusYMax = {};
-            PANELS.forEach(function(panel) {
-              var maxV = 0;
+            // Compute shared y-max for simple charts
+            var simpleMaxV = 0;
+            if (simpleCharts.length) {
               Object.keys(allData).forEach(function(s) {
-                (allData[s][panel.cpusKey] || []).forEach(function(p) {
-                  if (p.v > maxV) maxV = p.v;
+                var hasSimple = groups[s].some(function(el) {
+                  return el.dataset.chartType === 'simple';
+                });
+                if (!hasSimple) return;
+                var series = allData[s];
+                Object.keys(series).forEach(function(k) {
+                  (series[k] || []).forEach(function(p) {
+                    if (p.v > simpleMaxV) simpleMaxV = p.v;
+                  });
                 });
               });
-              sharedCpusYMax[panel.cpusKey] = alignedCpusMax(maxV);
-            });
+            }
+            var sharedSimpleYMax = alignedCpusMax(simpleMaxV);
 
-            // Render all charts with shared scales
+            // Render all charts
             Object.keys(groups).forEach(function(s) {
               var series = allData[s];
               if (!series) return;
               groups[s].forEach(function(el) {
-                renderChartWithSharedScale(el, series, sharedRatioYMax, sharedCpusYMax);
+                if (el.dataset.chartType === 'simple') {
+                  renderSimpleChart(el, series, sharedSimpleYMax);
+                } else {
+                  renderChartWithSharedScale(el, series, sharedRatioYMax, sharedCpusYMax);
+                }
               });
             });
           }

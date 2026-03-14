@@ -21,6 +21,8 @@ DEFAULTS = {
     },
     "factoryview": {
         "basedir": "/var/www/factoryview",
+        "factory_urls": "FNAL=http://cmssi-factory01.fnal.gov:8319/factory/monitor/,CERN=http://vocms0206.cern.ch/monitor/",
+        "fetch_timeout": "30",
     },
     "utilization": {
         "timespan": "31",

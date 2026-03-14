@@ -68,6 +68,20 @@ h2 {
 
 .section { margin-bottom: 24px; }
 
+details.section > summary {
+  cursor: pointer;
+  list-style: none;
+}
+details.section > summary::-webkit-details-marker { display: none; }
+details.section > summary h2::before {
+  content: "\25bc ";
+  font-size: 10px;
+  vertical-align: 1px;
+}
+details.section:not([open]) > summary h2::before {
+  content: "\25b6 ";
+}
+
 /* Stats */
 .stats-row {
   display: flex;
@@ -110,7 +124,7 @@ h2 {
 
 .chart {
   width: 420px;
-  height: 300px;
+  min-height: 260px;
   background: #fff;
   border-radius: 4px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
@@ -200,6 +214,22 @@ h2 {
 .data-table.compact { width: auto; }
 .data-table.compact td,
 .data-table.compact th { padding: 4px 12px; }
+
+/* %Use color classes */
+.use-green { color: #2e7d32; font-weight: 600; }
+.use-yellow { color: #f57f17; font-weight: 600; }
+.use-red { color: #c62828; font-weight: 600; }
+
+/* Error banner */
+.error-banner {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #bf360c;
+}
 
 /* Scrollable table container */
 .table-scroll {

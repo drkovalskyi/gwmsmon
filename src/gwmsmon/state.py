@@ -79,6 +79,7 @@ class State:
         self.timeseries = {}
         self.updated = 0
         self.exit_codes = {}         # {view: {workflow: {minute_ts: {code: count}}}}
+        self.exit_code_detail = {}   # {view: {code: {workflow: count, site: count, ...}}}
         self.history_watermarks = {} # {schedd_name: timestamp}
 
     def update(self, jobs, summary_ads, factory_data):
@@ -162,9 +163,13 @@ class State:
             "poolview": {
                 "schedds": {},
                 "negotiator": {},
+                "user_summary": {},
+                "totals": {},
             },
             "factoryview": {
-                "entries": {},
+                "sites": {},
+                "totals": {},
+                "errors": [],
             },
         }
 
@@ -369,6 +374,21 @@ class State:
                 sd["SubmitterIdle"] = ad.get("IdleJobs", 0)
                 sd["SubmitterHeld"] = ad.get("HeldJobs", 0)
 
+        # Schedd health ads → poolview
+        for name, health in summary_ads.get("schedd_health", {}).items():
+            sd = _ensure(snap["poolview"], "schedds", name)
+            sd["TotalRunningJobs"] = health.get("TotalRunningJobs", 0)
+            sd["TotalIdleJobs"] = health.get("TotalIdleJobs", 0)
+            sd["TotalHeldJobs"] = health.get("TotalHeldJobs", 0)
+            sd["MaxJobsRunning"] = health.get("MaxJobsRunning", 0)
+            sd["CMSGWMS_Type"] = health.get("CMSGWMS_Type", "unknown")
+            max_jobs = sd["MaxJobsRunning"]
+            if max_jobs > 0:
+                sd["PercentUse"] = round(
+                    sd["TotalRunningJobs"] * 100 / max_jobs)
+            else:
+                sd["PercentUse"] = 0
+
         # Slot ads → pilot inventory
         for ad in summary_ads.get("slots", []):
             site = ad.get("GLIDEIN_CMSSite")
@@ -394,7 +414,49 @@ class State:
         """Process factory XML data into factoryview."""
         if not factory_data:
             return
-        snap["factoryview"]["entries"] = factory_data
+
+        sites_raw = factory_data.get("sites", {})
+        snap["factoryview"]["errors"] = factory_data.get("errors", [])
+
+        total_running = 0
+        total_idle = 0
+        total_held = 0
+        site_summaries = {}
+
+        for site, entries in sites_raw.items():
+            site_running = 0
+            site_idle = 0
+            site_held = 0
+            entry_count = 0
+
+            for entry_name, factories in entries.items():
+                for factory_name, edata in factories.items():
+                    r = edata.get("running", 0)
+                    i = edata.get("idle", 0)
+                    h = edata.get("held", 0)
+                    site_running += r
+                    site_idle += i
+                    site_held += h
+                entry_count += 1
+
+            site_summaries[site] = {
+                "Running": site_running,
+                "Idle": site_idle,
+                "Held": site_held,
+                "Entries": entry_count,
+                "entries": entries,
+            }
+            total_running += site_running
+            total_idle += site_idle
+            total_held += site_held
+
+        snap["factoryview"]["sites"] = site_summaries
+        snap["factoryview"]["totals"] = {
+            "Running": total_running,
+            "Idle": total_idle,
+            "Held": total_held,
+            "Sites": len(site_summaries),
+        }
 
     # --- Step 9: Exit code collection ---
 
@@ -421,6 +483,7 @@ class State:
             minute = int(completion) // 60 * 60
             schedd_type = job.get("_schedd_type", "unknown")
             schedd_name = job.get("_schedd", "unknown")
+            site = job.get("MATCH_GLIDEIN_CMSSite", "unknown")
             count += 1
 
             # prodview: jobs with WMAgent_RequestName
@@ -433,6 +496,8 @@ class State:
                 bucket.setdefault(minute, {})
                 bucket[minute].setdefault(code_str, 0)
                 bucket[minute][code_str] += 1
+                self._add_exit_detail("prodview", code_str, minute,
+                                      request, site, "cmst1")
 
             # analysisview: jobs from crabschedd
             if schedd_type == "crabschedd":
@@ -447,6 +512,8 @@ class State:
                     bucket.setdefault(minute, {})
                     bucket[minute].setdefault(code_str, 0)
                     bucket[minute][code_str] += 1
+                    self._add_exit_detail("analysisview", code_str, minute,
+                                          wf_key, site, user)
 
             # globalview: all jobs — best Chirp, then signal, then raw
             chirp_gv = job.get("Chirp_WMCore_cmsRun_ExitCode")
@@ -472,9 +539,41 @@ class State:
             bucket.setdefault(minute, {})
             bucket[minute].setdefault(gv_code, 0)
             bucket[minute][gv_code] += 1
+            self._add_exit_detail("globalview", gv_code, minute,
+                                  gv_key, site, owner)
 
         self._prune_exit_code_window()
+        self._prune_exit_detail_window()
         log.info("processed %d exit code records", count)
+
+    def _add_exit_detail(self, view, code, minute, workflow, site, user):
+        """Track per-code breakdown by workflow, site, and user."""
+        detail = _ensure(self.exit_code_detail, view, code)
+        detail.setdefault(minute, {})
+        mb = detail[minute]
+        mb.setdefault("workflows", {})
+        mb["workflows"].setdefault(workflow, 0)
+        mb["workflows"][workflow] += 1
+        mb.setdefault("sites", {})
+        mb["sites"].setdefault(site, 0)
+        mb["sites"][site] += 1
+        mb.setdefault("users", {})
+        mb["users"].setdefault(user, 0)
+        mb["users"][user] += 1
+
+    def _prune_exit_detail_window(self):
+        """Remove exit code detail buckets older than the rolling window."""
+        cutoff = int(time.time()) // 60 * 60 - EXIT_CODE_WINDOW
+        for view, codes in self.exit_code_detail.items():
+            dead_codes = []
+            for code, buckets in codes.items():
+                dead = [ts for ts in buckets if ts < cutoff]
+                for ts in dead:
+                    del buckets[ts]
+                if not buckets:
+                    dead_codes.append(code)
+            for code in dead_codes:
+                del codes[code]
 
     def _prune_exit_code_window(self):
         """Remove exit code buckets older than the rolling window."""
@@ -547,6 +646,73 @@ class State:
                     "failure_rate": (round(wf_failures / wf_total, 4)
                                      if wf_total else 0),
                 })
+
+            # Per-workflow totals (all codes) for failure rate context
+            wf_totals = {}  # {wf: total_completed}
+            wf_failures = {}  # {wf: total_failures}
+            for wf, codes in flat.items():
+                wf_totals[wf] = sum(codes.values())
+                wf_failures[wf] = sum(v for k, v in codes.items()
+                                      if k != "0")
+
+            # Per-code detail files (workflows, sites, users breakdown)
+            ec_dir = os.path.join(basedir, "_exitcodes")
+            os.makedirs(ec_dir, exist_ok=True)
+            view_detail = self.exit_code_detail.get(view, {})
+            for code, buckets in view_detail.items():
+                workflows_agg = {}
+                sites_agg = {}
+                users_agg = {}
+                code_total = 0
+                for mb in buckets.values():
+                    for wf, n in mb.get("workflows", {}).items():
+                        workflows_agg.setdefault(wf, 0)
+                        workflows_agg[wf] += n
+                        code_total += n
+                    for s, n in mb.get("sites", {}).items():
+                        sites_agg.setdefault(s, 0)
+                        sites_agg[s] += n
+                    for u, n in mb.get("users", {}).items():
+                        users_agg.setdefault(u, 0)
+                        users_agg[u] += n
+                safe_code = code.replace(":", "_")
+                _atomic_json(os.path.join(ec_dir,
+                                          "{}.json".format(safe_code)), {
+                    "updated": self.updated,
+                    "code": code,
+                    "total": code_total,
+                    "workflows": workflows_agg,
+                    "wf_totals": {wf: wf_totals.get(wf, 0)
+                                  for wf in workflows_agg},
+                    "sites": sites_agg,
+                    "users": users_agg,
+                })
+
+            # _all.json — all completed jobs, per-workflow breakdown
+            all_workflows = {}
+            all_sites = {}
+            all_users = {}
+            for code, buckets in view_detail.items():
+                for mb in buckets.values():
+                    for wf, n in mb.get("workflows", {}).items():
+                        all_workflows.setdefault(wf, 0)
+                        all_workflows[wf] += n
+                    for s, n in mb.get("sites", {}).items():
+                        all_sites.setdefault(s, 0)
+                        all_sites[s] += n
+                    for u, n in mb.get("users", {}).items():
+                        all_users.setdefault(u, 0)
+                        all_users[u] += n
+            _atomic_json(os.path.join(ec_dir, "_all.json"), {
+                "updated": self.updated,
+                "total": total_jobs,
+                "failures": total_failures,
+                "workflows": all_workflows,
+                "wf_totals": wf_totals,
+                "wf_failures": wf_failures,
+                "sites": all_sites,
+                "users": all_users,
+            })
 
     def flush_exit_code_state(self, cfg):
         """Persist exit code buckets and watermarks for restart recovery."""
@@ -639,6 +805,36 @@ class State:
         if fs:
             self._ts_append("globalview", "_fairshare", fs, now)
 
+        # poolview
+        pv_totals = snap["poolview"].get("totals", {})
+        if pv_totals:
+            self._ts_append("poolview", "_summary", {
+                "TotalRunning": pv_totals.get("TotalRunning", 0),
+                "TotalIdle": pv_totals.get("TotalIdle", 0),
+                "TotalHeld": pv_totals.get("TotalHeld", 0),
+            }, now)
+        for schedd_name, sd in snap["poolview"].get("schedds", {}).items():
+            self._ts_append("poolview", "schedd:" + schedd_name, {
+                "TotalRunningJobs": sd.get("TotalRunningJobs", 0),
+                "TotalIdleJobs": sd.get("TotalIdleJobs", 0),
+                "TotalHeldJobs": sd.get("TotalHeldJobs", 0),
+            }, now)
+
+        # factoryview
+        fv_totals = snap["factoryview"].get("totals", {})
+        if fv_totals:
+            self._ts_append("factoryview", "_summary", {
+                "Running": fv_totals.get("Running", 0),
+                "Idle": fv_totals.get("Idle", 0),
+                "Held": fv_totals.get("Held", 0),
+            }, now)
+        for site_name, site_data in snap["factoryview"].get("sites", {}).items():
+            self._ts_append("factoryview", "site:" + site_name, {
+                "Running": site_data.get("Running", 0),
+                "Idle": site_data.get("Idle", 0),
+                "Held": site_data.get("Held", 0),
+            }, now)
+
     def _ts_append(self, view, entity, counts, now):
         """Append a data point for each non-zero counter."""
         if not any(counts.values()):
@@ -730,27 +926,106 @@ class State:
                 "sites": view_data.get("sites", {}),
             })
 
-        # globalview cross-view outputs
-        gv = snap.get("globalview", {})
+            # Per-request detail files (full subtask × site breakdown)
+            wf_source = (view_data.get("workflows", {})
+                         if view != "globalview"
+                         else view_data.get("users", {}))
+            for req, subtasks in wf_source.items():
+                req_dir = os.path.join(basedir, req.replace("/", os.sep))
+                os.makedirs(req_dir, exist_ok=True)
+                # Aggregate site counts across subtasks
+                req_sites = {}
+                for st_name, sites_data in subtasks.items():
+                    if st_name == "Summary":
+                        continue
+                    if not isinstance(sites_data, dict):
+                        continue
+                    for site_name, counts in sites_data.items():
+                        if site_name == "Summary":
+                            continue
+                        if not isinstance(counts, dict):
+                            continue
+                        s = req_sites.setdefault(site_name, _zero_counts())
+                        for k in s:
+                            s[k] += counts.get(k, 0)
+                _atomic_json(os.path.join(req_dir, "detail.json"), {
+                    "updated": self.updated,
+                    "subtasks": {
+                        st: data
+                        for st, data in subtasks.items()
+                    },
+                    "sites": req_sites,
+                })
+
+        # poolview
         poolview_dir = cfg.get("poolview", "basedir")
+        gv = snap.get("globalview", {})
+        pv = snap.get("poolview", {})
         if os.path.isdir(poolview_dir):
+            # Compute pool totals from schedd health data
+            pv_running = 0
+            pv_idle = 0
+            pv_held = 0
+            for sd in pv.get("schedds", {}).values():
+                pv_running += sd.get("TotalRunningJobs", 0)
+                pv_idle += sd.get("TotalIdleJobs", 0)
+                pv_held += sd.get("TotalHeldJobs", 0)
+            pv_totals = {
+                "TotalRunning": pv_running,
+                "TotalIdle": pv_idle,
+                "TotalHeld": pv_held,
+                "ScheddCount": len(pv.get("schedds", {})),
+            }
+            pv["totals"] = pv_totals
+
             _atomic_json(os.path.join(poolview_dir, "summary.json"), {
                 "updated": self.updated,
-                "schedds": snap.get("poolview", {}).get("schedds", {}),
+                "schedds": pv.get("schedds", {}),
                 "negotiator": gv.get("negotiator", {}),
                 "user_summary": gv.get("user_summary", {}),
+                "totals": pv_totals,
             })
 
+        # factoryview
         fv_dir = cfg.get("factoryview", "basedir")
+        fv = snap.get("factoryview", {})
         if os.path.isdir(fv_dir):
-            _atomic_json(os.path.join(fv_dir, "fact_entries.json"), {
+            _atomic_json(os.path.join(fv_dir, "summary.json"), {
                 "updated": self.updated,
-                "entries": snap.get("factoryview", {}).get("entries", {}),
+                "totals": fv.get("totals", {}),
+                "errors": fv.get("errors", []),
             })
+
+            # Per-site summaries (without nested entry detail)
+            site_summaries = {}
+            for site_name, site_data in fv.get("sites", {}).items():
+                site_summaries[site_name] = {
+                    k: v for k, v in site_data.items() if k != "entries"
+                }
+            _atomic_json(os.path.join(fv_dir, "totals.json"), {
+                "updated": self.updated,
+                "totals": fv.get("totals", {}),
+                "sites": site_summaries,
+            })
+
+            # Per-site detail files
+            for site_name, site_data in fv.get("sites", {}).items():
+                site_dir = os.path.join(fv_dir, site_name)
+                os.makedirs(site_dir, exist_ok=True)
+                _atomic_json(os.path.join(site_dir, "summary.json"), {
+                    "updated": self.updated,
+                    "site": site_name,
+                    "Running": site_data.get("Running", 0),
+                    "Idle": site_data.get("Idle", 0),
+                    "Held": site_data.get("Held", 0),
+                    "Entries": site_data.get("Entries", 0),
+                    "entries": site_data.get("entries", {}),
+                })
 
     def flush_timeseries(self, cfg):
         """Write time-series JSON files to disk."""
-        for view in ("prodview", "analysisview", "globalview"):
+        for view in ("prodview", "analysisview", "globalview",
+                      "poolview", "factoryview"):
             basedir = cfg.get(view, "basedir")
             if not os.path.isdir(basedir):
                 continue
@@ -768,7 +1043,8 @@ class State:
 
     def restore(self, cfg):
         """Load time-series from JSON files on startup."""
-        for view in ("prodview", "analysisview", "globalview"):
+        for view in ("prodview", "analysisview", "globalview",
+                      "poolview", "factoryview"):
             basedir = cfg.get(view, "basedir")
             ts_dir = os.path.join(basedir, "timeseries")
             if not os.path.isdir(ts_dir):

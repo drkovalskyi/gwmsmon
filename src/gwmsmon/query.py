@@ -14,6 +14,9 @@ import gc
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.request import urlopen
+from urllib.error import URLError
+from xml.etree import ElementTree
 
 import htcondor
 
@@ -55,6 +58,7 @@ HISTORY_PROJECTION = [
     "Chirp_WMCore_cmsRun_ExitCode",
     "Chirp_CRAB3_Job_ExitCode",
     "CompletionDate",
+    "MATCH_GLIDEIN_CMSSite",
     "WMAgent_RequestName",
     "CRAB_UserHN",
     "CRAB_ReqName",
@@ -67,19 +71,29 @@ HISTORY_PROJECTION = [
 def get_schedds(pool):
     """Query collector for schedd ads.
 
-    Returns a list of (schedd_ad, schedd_name, schedd_type) tuples.
+    Returns a list of (schedd_ad, schedd_name, schedd_type, health) tuples.
+    health is a dict with TotalRunningJobs, TotalIdleJobs, TotalHeldJobs,
+    MaxJobsRunning from the schedd ad itself.
     """
     collector = htcondor.Collector(pool)
     ads = collector.query(
         htcondor.AdTypes.Schedd,
         projection=["Name", "MyAddress", "CMSGWMS_Type",
-                     "ScheddIpAddr", "Machine"],
+                     "ScheddIpAddr", "Machine",
+                     "TotalRunningJobs", "TotalIdleJobs",
+                     "TotalHeldJobs", "MaxJobsRunning"],
     )
     result = []
     for ad in ads:
         name = classad_to_python(ad.get("Name", "unknown"))
         stype = classad_to_python(ad.get("CMSGWMS_Type", "unknown"))
-        result.append((ad, name, stype))
+        health = {
+            "TotalRunningJobs": classad_to_python(ad.get("TotalRunningJobs", 0)) or 0,
+            "TotalIdleJobs": classad_to_python(ad.get("TotalIdleJobs", 0)) or 0,
+            "TotalHeldJobs": classad_to_python(ad.get("TotalHeldJobs", 0)) or 0,
+            "MaxJobsRunning": classad_to_python(ad.get("MaxJobsRunning", 0)) or 0,
+        }
+        result.append((ad, name, stype, health))
     return result
 
 
@@ -131,7 +145,7 @@ def query_schedds_parallel(schedd_info, projection=None, max_workers=12):
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {}
-        for ad, name, stype in schedd_info:
+        for ad, name, stype, _health in schedd_info:
             f = pool.submit(_query_one, ad, name, stype)
             futures[f] = name
 
@@ -209,7 +223,7 @@ def query_history_parallel(schedd_info, watermarks, default_since=300,
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {}
-        for ad, name, stype in schedd_info:
+        for ad, name, stype, _health in schedd_info:
             f = pool.submit(_query_one, ad, name, stype)
             futures[f] = name
 
@@ -276,18 +290,148 @@ def query_negotiator_ads(pool):
 
 # --- 4c. Factory XML feeds ---
 
-def fetch_factory_xml(factory_urls):
+def _parse_factory_urls(factory_urls_str):
+    """Parse 'NAME=URL,NAME=URL' into list of (name, url) tuples."""
+    result = []
+    for part in factory_urls_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" in part:
+            name, url = part.split("=", 1)
+            result.append((name.strip(), url.strip()))
+        else:
+            result.append((part, part))
+    return result
+
+
+def _fetch_xml(url, timeout=30):
+    """Fetch and parse an XML document from a URL."""
+    resp = urlopen(url, timeout=timeout)
+    return ElementTree.parse(resp)
+
+
+def _parse_descript_xml(tree):
+    """Parse descript.xml into {entry_name: config_dict}.
+
+    Attributes are XML attributes on the <attributes> child element
+    (e.g., GLIDEIN_CMSSite="T1_DE_KIT"). Limits come from the
+    <descript> child element (PerEntryMaxHeld, PerEntryMaxIdle, etc.).
+    """
+    entries = {}
+    for entry_el in tree.iter("entry"):
+        name = entry_el.get("name")
+        if not name:
+            continue
+        cfg = {}
+        # <attributes GLIDEIN_CMSSite="..." GLIDEIN_CPUS="..." .../>
+        attrs_el = entry_el.find("attributes")
+        if attrs_el is not None:
+            cfg.update(attrs_el.attrib)
+        # <descript PerEntryMaxHeld="80" PerEntryMaxIdle="80" .../>
+        descript_el = entry_el.find("descript")
+        if descript_el is not None:
+            cfg.update(descript_el.attrib)
+        entries[name] = cfg
+    return entries
+
+
+def _parse_status_xml(tree):
+    """Parse rrd_Status_Attributes.xml into per-entry status.
+
+    Returns {entry_name: {running, idle, held}} using the period=7200
+    bucket and summing across frontends containing 'cmspilot'.
+    Status values are XML attributes on <period> elements
+    (e.g., StatusRunning="1.35", StatusIdle="9.97").
+    """
+    entries = {}
+    for entry_el in tree.iter("entry"):
+        name = entry_el.get("name")
+        if not name:
+            continue
+        running = 0.0
+        idle = 0.0
+        held = 0.0
+        for frontend_el in entry_el.iter("frontend"):
+            fname = frontend_el.get("name", "")
+            if "cmspilot" not in fname:
+                continue
+            for period_el in frontend_el.iter("period"):
+                if period_el.get("name") != "7200":
+                    continue
+                running += float(period_el.get("StatusRunning", "0"))
+                idle += float(period_el.get("StatusIdle", "0"))
+                held += float(period_el.get("StatusHeld", "0"))
+        entries[name] = {
+            "running": int(round(running)),
+            "idle": int(round(idle)),
+            "held": int(round(held)),
+        }
+    return entries
+
+
+def fetch_factory_xml(factory_urls_str, timeout=30):
     """Fetch factory XML status feeds.
 
-    factory_urls: list of base URLs for factory status pages
+    factory_urls_str: 'NAME=URL,NAME=URL' format
+    timeout: per-URL fetch timeout in seconds
 
-    Returns a dict with parsed factory entry data.
-    Placeholder — XML parsing to be implemented.
+    Returns {site: {entry: {factory: {running, idle, held, ...}}}}.
+    Dead URLs produce warnings but don't block.
     """
-    # TODO: fetch and parse descript.xml and
-    # rrd_Status_Attributes.xml from each factory URL
-    log.info("factory XML fetch not yet implemented")
-    return {}
+    urls = _parse_factory_urls(factory_urls_str)
+    if not urls:
+        return {}
+
+    result = {}  # {site: {entry: {factory: {...}}}}
+    errors = []
+
+    for factory_name, base_url in urls:
+        base_url = base_url.rstrip("/")
+        try:
+            descript_tree = _fetch_xml(
+                base_url + "/descript.xml", timeout)
+            status_tree = _fetch_xml(
+                base_url + "/rrd_Status_Attributes.xml", timeout)
+        except (URLError, ElementTree.ParseError, OSError) as exc:
+            log.warning("factory %s fetch failed: %s", factory_name, exc)
+            errors.append({"factory": factory_name, "error": str(exc)})
+            continue
+
+        descript = _parse_descript_xml(descript_tree)
+        status = _parse_status_xml(status_tree)
+
+        for entry_name, cfg in descript.items():
+            site = cfg.get("GLIDEIN_CMSSite", "Unknown")
+            entry_status = status.get(entry_name, {})
+
+            entry_data = {
+                "running": entry_status.get("running", 0),
+                "idle": entry_status.get("idle", 0),
+                "held": entry_status.get("held", 0),
+                "maxIdle": _int_or(cfg.get("PerEntryMaxIdle"), 0),
+                "maxHeld": _int_or(cfg.get("PerEntryMaxHeld"), 0),
+                "maxMem": _int_or(cfg.get("GLIDEIN_MaxMemMBs"), 0),
+                "maxWalltime": _int_or(cfg.get("GLIDEIN_Max_Walltime"), 0),
+                "maxCpus": _int_or(cfg.get("GLIDEIN_CPUS"), 0),
+            }
+
+            site_entries = result.setdefault(site, {})
+            entry_factories = site_entries.setdefault(entry_name, {})
+            entry_factories[factory_name] = entry_data
+
+        log.info("factory %s: %d entries parsed", factory_name,
+                 len(descript))
+
+    return {"sites": result, "errors": errors}
+
+
+def _int_or(val, default=0):
+    """Convert to int, return default on failure."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
 
 
 # --- Orchestration ---
@@ -313,12 +457,19 @@ def query_all(cfg):
         "submitters": query_schedd_summary_ads(pool),
         "slots": query_slot_ads(pool),
         "negotiator": query_negotiator_ads(pool),
+        "schedd_health": {
+            name: {**health, "CMSGWMS_Type": stype}
+            for (_, name, stype, health) in schedd_info
+        },
     }
     log.info("collected summary ads in %.1fs", time.time() - t1)
 
     # 4c: factory XML
+    fetch_timeout = int(cfg.get("factoryview", "fetch_timeout",
+                                fallback="30"))
     factory_data = fetch_factory_xml(
-        cfg.get("factoryview", "factory_urls", fallback="")
+        cfg.get("factoryview", "factory_urls", fallback=""),
+        timeout=fetch_timeout,
     )
 
     return jobs, summary_ads, factory_data, schedd_info

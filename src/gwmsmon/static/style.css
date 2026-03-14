@@ -108,10 +108,39 @@ h2 {
   flex-wrap: wrap;
 }
 
-.graphs-row img {
+.chart {
+  width: 420px;
+  height: 300px;
   background: #fff;
   border-radius: 4px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.chart-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #aaa;
+  font-size: 12px;
+}
+
+.chart .u-wrap { border-radius: 4px; }
+
+.chart-tooltip {
+  position: absolute;
+  background: rgba(255,255,255,0.95);
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
 }
 
 /* Tables */

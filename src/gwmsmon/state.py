@@ -601,6 +601,14 @@ class State:
         # globalview
         self._ts_append("globalview", "_summary",
                         snap["globalview"]["totals"], now)
+        for user, tasks in snap["globalview"]["users"].items():
+            user_totals = _zero_counts()
+            for task_name, sites in tasks.items():
+                summary = sites.get("Summary", {})
+                for k in user_totals:
+                    user_totals[k] += summary.get(k, 0)
+            self._ts_append("globalview", f"request:{user}",
+                            user_totals, now)
         for site, counts in snap["globalview"]["sites"].items():
             self._ts_append("globalview", f"site:{site}", counts, now)
 

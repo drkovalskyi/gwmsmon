@@ -209,6 +209,32 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             updated_ts=updated,
         )
 
+    # --- Timeseries JSON endpoint ---
+
+    @app.route("/<view>/tsdata/<path:entity>")
+    def tsdata(view, entity):
+        if view not in VIEWS:
+            abort(404)
+        basedir = cfg.get(view, "basedir")
+
+        # Map URL path to timeseries filename
+        parts = entity.strip("/").split("/", 1)
+        kind = parts[0]
+        if kind == "summary":
+            filename = "_summary.json"
+        elif kind in ("request", "site") and len(parts) == 2:
+            safe = parts[1].replace("/", "_")
+            filename = "{}_{}.json".format(kind, safe)
+        else:
+            abort(404)
+
+        ts_dir = os.path.join(basedir, "timeseries")
+        resp = send_from_directory(
+            ts_dir, filename, mimetype="application/json",
+        )
+        resp.headers["Cache-Control"] = "max-age=120, public"
+        return resp
+
     # --- JSON endpoints ---
 
     @app.route("/<view>/json/<path:filename>")

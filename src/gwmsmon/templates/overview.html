@@ -27,9 +27,9 @@
 </div>
 
 <div class="graphs-row">
-  <img src="/{{ view }}/graphs/summary/hourly" width="520" height="200" alt="Hourly">
-  <img src="/{{ view }}/graphs/summary/daily" width="520" height="200" alt="Daily">
-  <img src="/{{ view }}/graphs/summary/weekly" width="520" height="200" alt="Weekly">
+  <div class="chart" data-src="/{{ view }}/tsdata/summary" data-interval="hourly"></div>
+  <div class="chart" data-src="/{{ view }}/tsdata/summary" data-interval="daily"></div>
+  <div class="chart" data-src="/{{ view }}/tsdata/summary" data-interval="weekly"></div>
 </div>
 
 {% if exit_codes and exit_codes.get('total', 0) > 0 %}

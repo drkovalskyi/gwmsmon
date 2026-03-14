@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}gwmsmon{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<nav>
+  <span class="nav-brand">gwmsmon</span>
+  {% for v, vc in views.items() %}
+  <a href="/{{ v }}/" class="{% if v == view %}active{% endif %}">{{ vc.title }}</a>
+  {% endfor %}
+  <span class="freshness" data-updated="{{ updated_ts }}">{{ freshness }}</span>
+</nav>
+<main>
+{% block content %}{% endblock %}
+</main>
+<script src="{{ url_for('static', filename='gwmsmon.js') }}"></script>
+</body>
+</html>

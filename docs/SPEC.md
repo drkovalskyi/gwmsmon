@@ -403,26 +403,39 @@ All JSON writes are atomic (write to tmp file, then rename).
 
 ### 5.3 Time-Series Storage
 
-**In-memory rolling buffers with periodic JSON flush.** No RRD, no
+**Sparse in-memory time-series with periodic JSON flush.** No RRD, no
 database, no external daemon.
 
 The collection process (long-running) maintains time-series in memory:
-- Each cycle appends a data point to the relevant buffers
-- Every N cycles, the full buffers are flushed to disk as JSON
-- On startup, buffers are restored from the JSON files
+- A data point is appended **only when the entity has data** (jobs
+  running, idle, etc.). Inactive workflows produce no data points —
+  no padding, no gaps filled with zeros.
+- Every N cycles, the series are flushed to disk as JSON
+- On startup, series are restored from the JSON files
 - If the process crashes, at most a few minutes of data are lost
 
-**Two retention tiers:**
-- **Full resolution** (~3.5 days at collection-step intervals): `summary.json`
-- **Downsampled hourly** (~140 days): `summary_history.json`
+**Sparse storage matters.** Production workflows can be active for
+months (up to a year). But most have bursts of activity, not
+continuous presence. Sparse storage means a workflow active for 2
+months out of a 6-month lifetime stores 2 months of data, not 6.
+Graph rendering handles gaps naturally — no data means no line.
+
+**Retention:**
+- **Full resolution** (collection-step intervals): kept for 3.5 days
+- **Hourly downsample**: kept for 365 days (covers the full workflow
+  lifecycle — workflows can run up to a year)
+- Points older than 365 days are dropped
 
 Downsampling (averaging full-res points into hourly buckets) runs as
 part of the periodic flush.
 
+**Cleanup:** Workflow/request directories are pruned 30 days after
+last activity (no data points recorded). This prevents unbounded
+accumulation of dead directories.
+
 **File format:**
 ```json
 {
-  "step": 180,
   "updated": 1772820180,
   "series": {
     "Running":   [{"t": 1772820000, "v": 45231}, ...],
@@ -432,6 +445,7 @@ part of the periodic flush.
 }
 ```
 
+Timestamps are explicit per data point — no fixed step assumed.
 Plain JSON — easy to inspect with `cat`, `jq`, or load in a notebook.
 Matplotlib reads these files directly to render graphs.
 
@@ -631,12 +645,15 @@ Continuous (adaptive pacing):
        │
        ├──▶ JSON files (atomic write)
        │
-       └──▶ Time-series updates
+       └──▶ Time-series updates (sparse — only if entity has data)
 
   Adaptive pacing: if view has active users → short cooldown
                     if view has no users   → long cooldown
 
 Periodic (hourly):
+  Downsample full-res points older than 3.5 days → hourly
+  Drop points older than 365 days
+  Prune workflow dirs inactive for 30+ days
   Read time-series → compute daily max → write maxused.json
 
 On HTTP request:
@@ -669,7 +686,7 @@ Background:
 | mod_wsgi 3.4           | Flask                 | Modern, simple                  |
 | jQuery + Google Charts | Minimal vanilla JS    | No heavy frameworks             |
 | rrdtool graphs         | Matplotlib            | Modern, clean visuals           |
-| RRD files + rrdcached  | In-memory + JSON flush| No external daemons, debuggable |
+| RRD files + rrdcached  | Sparse in-memory + JSON flush | No external daemons, debuggable, 365-day retention |
 | Fixed cron intervals   | Adaptive pacing       | Continuous collection           |
 | Sequential schedd queries | Parallel            | Major speedup                   |
 | On-demand graphs only  | Adaptive pre-rendering| Usage-driven                    |

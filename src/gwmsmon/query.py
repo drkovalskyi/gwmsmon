@@ -39,8 +39,7 @@ JOB_PROJECTION = [
     "CRAB_ReqName",
     "QDate",
     "CRAB_UserWebDir",
-    "Dashboard_TaskId",
-    "BLTaskID",
+    "DAGManJobId",
     "SubmitFile",
     "DAG_NodesTotal",
     "DAG_NodesDone",
@@ -57,8 +56,7 @@ HISTORY_PROJECTION = [
     "CRAB_UserHN",
     "CRAB_ReqName",
     "Owner",
-    "Dashboard_TaskId",
-    "BLTaskID",
+    "DAGManJobId",
     "SubmitFile",
 ]
 

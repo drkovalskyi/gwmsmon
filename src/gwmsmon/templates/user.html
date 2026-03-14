@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} — {{ view_cfg.title }} — gwmsmon{% endblock %}
+{% block content %}
+<h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / {{ name }}</h1>
+
+<div class="stats-row">
+  <div class="stat">
+    <div class="stat-value">{{ req_totals.Running|fmt }}</div>
+    <div class="stat-label">Running Jobs</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ req_totals.MatchingIdle|fmt }}</div>
+    <div class="stat-label">Idle Jobs</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ req_totals.CpusInUse|fmt }}</div>
+    <div class="stat-label">CPUs in Use</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ req_totals.CpusPending|fmt }}</div>
+    <div class="stat-label">CPUs Pending</div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Requests ({{ workflows|length }})</h2>
+  <div class="table-scroll">
+  <table class="data-table sortable">
+    <thead>
+      <tr>
+        <th>Request</th>
+        <th data-sort="num">Running</th>
+        <th data-sort="num">Idle</th>
+        <th data-sort="num">CPUs Use</th>
+        <th data-sort="num">CPUs Pend</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for wf_name, subtasks in workflows.items() %}
+    {% set running = namespace(v=0) %}
+    {% set idle = namespace(v=0) %}
+    {% set cpus_use = namespace(v=0) %}
+    {% set cpus_pend = namespace(v=0) %}
+    {% for st_data in subtasks.values() %}
+      {% set running.v = running.v + st_data.get('Running', 0) %}
+      {% set idle.v = idle.v + st_data.get('MatchingIdle', 0) %}
+      {% set cpus_use.v = cpus_use.v + st_data.get('CpusInUse', 0) %}
+      {% set cpus_pend.v = cpus_pend.v + st_data.get('CpusPending', 0) %}
+    {% endfor %}
+    <tr>
+      <td><a href="/{{ view }}/request/{{ wf_name }}">{{ wf_name }}</a></td>
+      <td>{{ running.v|fmt }}</td>
+      <td>{{ idle.v|fmt }}</td>
+      <td>{{ cpus_use.v|fmt }}</td>
+      <td>{{ cpus_pend.v|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

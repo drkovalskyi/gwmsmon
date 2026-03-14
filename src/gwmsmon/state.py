@@ -280,11 +280,11 @@ class State:
         schedd_name = job.get("_schedd", "unknown")
         site = job.get("MATCH_GLIDEIN_CMSSite")
 
-        # Task identifier fallback chain (SPEC 4.4)
+        # Task identifier fallback chain
+        dagman_id = job.get("DAGManJobId")
         task = (job.get("CRAB_ReqName")
                 or job.get("WMAgent_RequestName")
-                or job.get("Dashboard_TaskId")
-                or job.get("BLTaskID")
+                or (f"{schedd_name}#{dagman_id}" if dagman_id else None)
                 or job.get("SubmitFile")
                 or "unknown")
 
@@ -681,10 +681,13 @@ class State:
                 "totals": view_data.get("totals", {}),
             })
 
-            _atomic_json(os.path.join(basedir, "totals.json"), {
-                "updated": self.updated,
-                "totals": view_data.get("totals", {}),
-                "workflows": {
+            if view == "analysisview":
+                wf_out = {
+                    req: {"Summary": subtasks.get("Summary", {})}
+                    for req, subtasks in view_data.get("workflows", {}).items()
+                }
+            else:
+                wf_out = {
                     req: {
                         st: data.get("Summary", {})
                         for st, data in subtasks.items()
@@ -692,7 +695,12 @@ class State:
                     for req, subtasks in view_data.get("workflows",
                                                        view_data.get("users",
                                                                      {})).items()
-                },
+                }
+
+            _atomic_json(os.path.join(basedir, "totals.json"), {
+                "updated": self.updated,
+                "totals": view_data.get("totals", {}),
+                "workflows": wf_out,
             })
 
             _atomic_json(os.path.join(basedir, "site_summary.json"), {

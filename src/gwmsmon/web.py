@@ -28,7 +28,7 @@ VIEWS = {
     },
     "analysisview": {
         "title": "Analysis",
-        "entity_label": "User/Task",
+        "entity_label": "User",
     },
     "globalview": {
         "title": "Global",
@@ -113,13 +113,32 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
 
         # Sort workflows by running desc, then idle desc
         workflows = totals_data.get("workflows", {})
-        sorted_wf = sorted(
-            workflows.items(),
-            key=lambda x: (
-                -_subtask_total(x[1], "Running"),
-                -_subtask_total(x[1], "MatchingIdle"),
-            ),
-        )
+
+        # For analysisview, group by user (part before first '/')
+        if view == "analysisview":
+            users = {}
+            for wf_name, subtasks in workflows.items():
+                user = wf_name.split("/", 1)[0]
+                if user not in users:
+                    users[user] = {"Running": 0, "MatchingIdle": 0,
+                                   "CpusInUse": 0, "CpusPending": 0}
+                for st_data in subtasks.values():
+                    for k in users[user]:
+                        users[user][k] += st_data.get(k, 0)
+            sorted_wf = sorted(
+                users.items(),
+                key=lambda x: (-x[1]["Running"], -x[1]["MatchingIdle"]),
+            )
+            entity_url_prefix = "user"
+        else:
+            sorted_wf = sorted(
+                workflows.items(),
+                key=lambda x: (
+                    -_subtask_total(x[1], "Running"),
+                    -_subtask_total(x[1], "MatchingIdle"),
+                ),
+            )
+            entity_url_prefix = "request"
 
         # Sort sites by running desc
         sites = site_summary.get("sites", {})
@@ -142,6 +161,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,
+            entity_url_prefix=entity_url_prefix,
         )
 
     @app.route("/<view>/request/<path:name>")
@@ -179,6 +199,45 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             subtasks=subtasks,
             req_totals=req_totals,
             exit_codes=exit_codes,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
+
+    @app.route("/<view>/user/<name>")
+    def user_detail(view, name):
+        if view != "analysisview":
+            abort(404)
+        basedir = cfg.get(view, "basedir")
+
+        totals_data = _load_json(basedir, "totals.json")
+        workflows = totals_data.get("workflows", {})
+
+        # Filter workflows belonging to this user
+        prefix = name + "/"
+        user_wf = {k: v for k, v in workflows.items()
+                   if k.startswith(prefix) or k == name}
+        if not user_wf:
+            abort(404)
+
+        # Compute user-level totals
+        req_totals = {"Running": 0, "MatchingIdle": 0,
+                      "CpusInUse": 0, "CpusPending": 0}
+        for subtasks in user_wf.values():
+            for st_data in subtasks.values():
+                for k in req_totals:
+                    req_totals[k] += st_data.get(k, 0)
+
+        summary = _load_json(basedir, "summary.json")
+        updated = summary.get("updated", 0)
+
+        return render_template(
+            "user.html",
+            view=view,
+            view_cfg=VIEWS[view],
+            name=name,
+            workflows=user_wf,
+            req_totals=req_totals,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,

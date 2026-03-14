@@ -200,3 +200,19 @@ h2 {
 .data-table.compact { width: auto; }
 .data-table.compact td,
 .data-table.compact th { padding: 4px 12px; }
+
+/* Scrollable table container */
+.table-scroll {
+  max-height: 600px;
+  overflow-y: auto;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.table-scroll .data-table {
+  box-shadow: none;
+}
+.table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}

@@ -15,6 +15,7 @@ from flask import (Flask, abort, render_template, redirect,
                    send_from_directory, url_for)
 
 from gwmsmon import config
+from gwmsmon.exitcodes import describe as _describe_exit_code
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +82,27 @@ def _format_number(n):
     return "{:,}".format(n)
 
 
+def _annotate_exit_codes(exit_codes):
+    """Add descriptions to exit code dicts.
+
+    Transforms exit_codes.codes from {"code": count} to a list of
+    {"code": str, "count": int, "desc": str} sorted by count desc.
+    """
+    if not exit_codes or "codes" not in exit_codes:
+        return exit_codes
+    codes = exit_codes["codes"]
+    annotated = []
+    for code, count in codes.items():
+        annotated.append({
+            "code": code,
+            "count": count,
+            "desc": _describe_exit_code(code),
+        })
+    annotated.sort(key=lambda x: -x["count"])
+    exit_codes["annotated"] = annotated
+    return exit_codes
+
+
 def create_app(config_path="/etc/gwmsmon2.conf"):
     app = Flask(
         __name__,
@@ -109,7 +131,8 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         summary = _load_json(basedir, "summary.json")
         totals_data = _load_json(basedir, "totals.json")
         site_summary = _load_json(basedir, "site_summary.json")
-        exit_codes = _load_json(basedir, "exit_codes.json")
+        exit_codes = _annotate_exit_codes(
+            _load_json(basedir, "exit_codes.json"))
 
         # Sort workflows by running desc, then idle desc
         workflows = totals_data.get("workflows", {})
@@ -176,10 +199,10 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             abort(404)
 
         subtasks = workflows[name]
-        exit_codes = _load_json(
+        exit_codes = _annotate_exit_codes(_load_json(
             os.path.join(basedir, name.replace("/", os.sep)),
             "exit_codes.json",
-        )
+        ))
 
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)

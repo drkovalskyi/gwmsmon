@@ -43,16 +43,18 @@
       <div class="stat-label">Failure Rate</div>
     </div>
   </div>
+  {% if exit_codes.get('annotated') %}
   <table class="data-table compact">
-    <thead><tr><th>Exit Code</th><th>Count</th></tr></thead>
+    <thead><tr><th>Exit Code</th><th>Description</th><th>Count</th></tr></thead>
     <tbody>
-    {% for code, count in exit_codes.codes|dictsort(by='value', reverse=true) %}
-    <tr class="{% if code != '0' %}fail{% endif %}">
-      <td>{{ code }}</td><td>{{ count|fmt }}</td>
+    {% for entry in exit_codes.annotated %}
+    <tr class="{% if entry.code != '0' %}fail{% endif %}">
+      <td>{{ entry.code }}</td><td>{{ entry.desc }}</td><td>{{ entry.count|fmt }}</td>
     </tr>
     {% endfor %}
     </tbody>
   </table>
+  {% endif %}
 </div>
 {% endif %}
 

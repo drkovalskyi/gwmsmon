@@ -404,23 +404,31 @@ class State:
         Routes each completed job to the appropriate view(s) using the
         same logic as live job routing. Accumulates into minute-bucketed
         rolling window.
+
+        Exit code selection per view:
+        - prodview: Chirp_WMCore_cmsRun_ExitCode (fallback ExitCode)
+        - analysisview: Chirp_CRAB3_Job_ExitCode (fallback ExitCode)
+        - globalview: best Chirp code, then ExitBySignal as SIG:N, then ExitCode
         """
         count = 0
         for job in history_jobs:
-            exit_code = job.get("ExitCode")
-            if exit_code is None:
+            raw_exit = job.get("ExitCode")
+            if raw_exit is None:
                 continue
-            code_str = str(exit_code)
             completion = job.get("CompletionDate")
             if not completion:
                 continue
             minute = int(completion) // 60 * 60
             schedd_type = job.get("_schedd_type", "unknown")
+            schedd_name = job.get("_schedd", "unknown")
             count += 1
 
             # prodview: jobs with WMAgent_RequestName
             request = job.get("WMAgent_RequestName")
             if request:
+                chirp_prod = job.get("Chirp_WMCore_cmsRun_ExitCode")
+                code_str = str(chirp_prod if chirp_prod is not None
+                               else raw_exit)
                 bucket = _ensure(self.exit_codes, "prodview", request)
                 bucket.setdefault(minute, {})
                 bucket[minute].setdefault(code_str, 0)
@@ -431,25 +439,39 @@ class State:
                 user = job.get("CRAB_UserHN")
                 crab_req = job.get("CRAB_ReqName")
                 if user and crab_req:
+                    chirp_crab = job.get("Chirp_CRAB3_Job_ExitCode")
+                    code_str = str(chirp_crab if chirp_crab is not None
+                                   else raw_exit)
                     wf_key = "{}/{}".format(user, crab_req)
                     bucket = _ensure(self.exit_codes, "analysisview", wf_key)
                     bucket.setdefault(minute, {})
                     bucket[minute].setdefault(code_str, 0)
                     bucket[minute][code_str] += 1
 
-            # globalview: all jobs
+            # globalview: all jobs — best Chirp, then signal, then raw
+            chirp_gv = job.get("Chirp_WMCore_cmsRun_ExitCode")
+            if chirp_gv is None:
+                chirp_gv = job.get("Chirp_CRAB3_Job_ExitCode")
+            if chirp_gv is not None:
+                gv_code = str(chirp_gv)
+            elif job.get("ExitBySignal"):
+                gv_code = "SIG:{}".format(raw_exit)
+            else:
+                gv_code = str(raw_exit)
+
             owner = job.get("Owner", "unknown")
+            dagman_id = job.get("DAGManJobId")
             task = (job.get("CRAB_ReqName")
                     or job.get("WMAgent_RequestName")
-                    or job.get("Dashboard_TaskId")
-                    or job.get("BLTaskID")
+                    or ("{}#{}".format(schedd_name, dagman_id)
+                        if dagman_id else None)
                     or job.get("SubmitFile")
                     or "unknown")
             gv_key = "{}/{}".format(owner, task)
             bucket = _ensure(self.exit_codes, "globalview", gv_key)
             bucket.setdefault(minute, {})
-            bucket[minute].setdefault(code_str, 0)
-            bucket[minute][code_str] += 1
+            bucket[minute].setdefault(gv_code, 0)
+            bucket[minute][gv_code] += 1
 
         self._prune_exit_code_window()
         log.info("processed %d exit code records", count)

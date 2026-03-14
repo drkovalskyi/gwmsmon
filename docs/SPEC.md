@@ -301,12 +301,44 @@ than the cutoff. This makes incremental queries fast:
 1. Track a `last_query_time` watermark per schedd
 2. Each cycle, query `schedd.history()` with
    `since=CompletionDate < last_query_time`
-3. Projection: `ExitCode`, workflow/task identifier, `CompletionDate`
+3. Projection: `ExitCode`, `ExitBySignal`, `Chirp_WMCore_cmsRun_ExitCode`,
+   `Chirp_CRAB3_Job_ExitCode`, workflow/task identifiers, `CompletionDate`
 4. Aggregate into rolling exit code counters per workflow/task
 5. Update watermark to current time
 
 This runs alongside the live job queries in the same collection cycle,
 adding ~3s sequential (~1s parallel) — negligible overhead.
+
+**Exit code selection per view:**
+
+CMS jobs publish full WMCore-range exit codes via Chirp classad attributes.
+These carry much more information than the raw HTCondor `ExitCode` (0-255):
+
+| View          | Primary code                        | Fallback     |
+|---------------|-------------------------------------|--------------|
+| prodview      | `Chirp_WMCore_cmsRun_ExitCode`      | `ExitCode`   |
+| analysisview  | `Chirp_CRAB3_Job_ExitCode`          | `ExitCode`   |
+| globalview    | Best Chirp → `SIG:N` → `ExitCode`  | —            |
+
+For **globalview**, the fallback chain is:
+1. `Chirp_WMCore_cmsRun_ExitCode` or `Chirp_CRAB3_Job_ExitCode` (CMS jobs)
+2. If `ExitBySignal` is true: store as `SIG:<ExitCode>` (e.g., `SIG:9`)
+3. Otherwise: raw `ExitCode`
+
+**Exit code descriptions:**
+
+Exit codes are mapped to human-readable descriptions using the
+`WM_JOB_ERROR_CODES` dictionary from
+[WMCore/WMExceptions.py](https://github.com/dmwm/WMCore/blob/master/src/python/WMCore/WMExceptions.py),
+stored locally in `gwmsmon/exitcodes.py`. The `describe()` function
+handles three formats:
+
+- `"SIG:<N>"` → "Killed by SIGKILL" (or signal name from POSIX table)
+- `"<integer>"` → WMCore description if known, empty string if not
+- Anything else → empty string
+
+The web layer annotates each exit code with its description before
+rendering templates. Unknown codes display a blank description column.
 
 **Aggregation:**
 
@@ -324,8 +356,8 @@ Flushed to JSON per view: `exit_codes.json` (overall) and
 `{request}/exit_codes.json` (per-workflow).
 
 **Display:** Overview pages show a summary of non-zero exit codes
-(failure rate, top exit codes). Request detail pages show the full
-exit code distribution for that workflow.
+(failure rate, top exit codes with descriptions). Request detail pages
+show the full exit code distribution with descriptions for that workflow.
 
 ### 4.6 Job Status Mapping
 

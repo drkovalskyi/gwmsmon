@@ -51,6 +51,9 @@ JOB_PROJECTION = [
 # Projection for history queries (exit code collection, SPEC 4.5)
 HISTORY_PROJECTION = [
     "ExitCode",
+    "ExitBySignal",
+    "Chirp_WMCore_cmsRun_ExitCode",
+    "Chirp_CRAB3_Job_ExitCode",
     "CompletionDate",
     "WMAgent_RequestName",
     "CRAB_UserHN",

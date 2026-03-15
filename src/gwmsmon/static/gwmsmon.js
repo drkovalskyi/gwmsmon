@@ -419,9 +419,8 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     var seriesKeys = Object.keys(series).slice(0, 3);
     if (!seriesKeys.length) return;
 
-    // Derive x-range from data: latest point is the right edge
-    var xMax = seriesMaxTime(series, seriesKeys);
-    if (!xMax) return;
+    // Fixed x-range: right edge = now, left edge = now - interval
+    var xMax = Math.floor(Date.now() / 1000);
     var xMin = xMax - interval;
 
     var aligned = buildAligned(series, seriesKeys, xMin);
@@ -451,7 +450,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
       padding: [4, 8, 2, LEFT_PAD],
       plugins: [tooltipPlugin()],
       scales: {
-        x: { min: aligned.tMin, max: aligned.tMax },
+        x: { min: xMin, max: xMax },
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
@@ -675,9 +674,8 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     label.textContent = {hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days'}[el.dataset.interval] || el.dataset.interval;
     el.appendChild(label);
 
-    // Derive x-range from data: latest point is the right edge
-    var xMax = seriesMaxTime(series);
-    if (!xMax) return;
+    // Fixed x-range: right edge = now, left edge = now - interval
+    var xMax = Math.floor(Date.now() / 1000);
     var xMin = xMax - interval;
     var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
 
@@ -711,7 +709,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
         padding: [4, 4, isBottom ? 2 : 0, LEFT_PAD],
         plugins: [tooltipPlugin(), rightLabelPlugin('cores/job', RATIO_COLOR)],
         scales: {
-          x: { min: aligned.tMin, max: aligned.tMax },
+          x: { min: xMin, max: xMax },
           cpus: { min: 0, max: cpusYMax, auto: false },
           ratio: { min: 0, max: sharedRatioYMax, auto: false },
         },

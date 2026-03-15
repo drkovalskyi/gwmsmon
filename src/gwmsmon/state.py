@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 # Retention: full resolution for 3.5 days, hourly for 365 days
 FULL_RES_SECONDS = int(3.5 * 86400)  # 302400
-HOURLY_RES_SECONDS = 365 * 86400     # 31536000
+HOURLY_RES_SECONDS = 30 * 86400      # 2592000
 PRUNE_INACTIVE_DAYS = 30
 EXIT_CODE_WINDOW = 7 * 86400       # retain 7 days of buckets
 EXIT_CODE_BUCKET = 600              # 10-minute bucket resolution
@@ -789,6 +789,15 @@ class State:
                 }
                 for view, workflows in self.exit_codes.items()
             },
+            "exit_code_detail": {
+                view: {
+                    code: {
+                        str(ts): mb for ts, mb in buckets.items()
+                    }
+                    for code, buckets in codes.items()
+                }
+                for view, codes in self.exit_code_detail.items()
+            },
         })
 
     def restore_exit_code_state(self, cfg):
@@ -816,6 +825,26 @@ class State:
                             merged[aligned][code] += count
                     self.exit_codes[view][wf] = merged
             self._prune_exit_code_window()
+
+            # Restore exit_code_detail
+            raw_detail = data.get("exit_code_detail", {})
+            for view, codes in raw_detail.items():
+                self.exit_code_detail[view] = {}
+                for code, buckets in codes.items():
+                    merged = {}
+                    for ts, mb in buckets.items():
+                        aligned = int(ts) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
+                        if aligned not in merged:
+                            merged[aligned] = {}
+                        dest = merged[aligned]
+                        for dim in ("workflows", "sites", "users"):
+                            for k, n in mb.get(dim, {}).items():
+                                dest.setdefault(dim, {})
+                                dest[dim].setdefault(k, 0)
+                                dest[dim][k] += n
+                    self.exit_code_detail[view][code] = merged
+            self._prune_exit_detail_window()
+
             total_wf = sum(len(wfs) for wfs in self.exit_codes.values())
             log.info("restored exit code state: %d watermarks, %d workflows",
                      len(self.history_watermarks), total_wf)
@@ -916,7 +945,10 @@ class State:
         ts = _ensure(self.timeseries, view, entity)
         for key, val in counts.items():
             if val:
-                ts.setdefault(key, []).append({"t": now, "v": val})
+                if key not in ts:
+                    ts[key] = {"t": [], "v": []}
+                ts[key]["t"].append(now)
+                ts[key]["v"].append(val)
 
     # --- Step 6: Time-series maintenance ---
 
@@ -929,24 +961,29 @@ class State:
         for view, entities in self.timeseries.items():
             dead_entities = []
             for entity, series in entities.items():
-                for key, points in series.items():
+                for key, pts in series.items():
+                    t_arr = pts["t"]
+                    v_arr = pts["v"]
                     # Separate into: keep full-res, downsample, drop
-                    full_res = []
-                    to_downsample = []
-                    for p in points:
-                        if p["t"] >= cutoff_full:
-                            full_res.append(p)
-                        elif p["t"] >= cutoff_hourly:
-                            to_downsample.append(p)
-                        # else: older than 365 days — drop
+                    full_t, full_v = [], []
+                    ds_t, ds_v = [], []
+                    for i in range(len(t_arr)):
+                        t = t_arr[i]
+                        if t >= cutoff_full:
+                            full_t.append(t)
+                            full_v.append(v_arr[i])
+                        elif t >= cutoff_hourly:
+                            ds_t.append(t)
+                            ds_v.append(v_arr[i])
 
                     # Downsample to hourly buckets
-                    hourly = _downsample_hourly(to_downsample)
+                    ht, hv = _downsample_hourly(ds_t, ds_v)
 
-                    series[key] = hourly + full_res
+                    pts["t"] = ht + full_t
+                    pts["v"] = hv + full_v
 
                 # Prune empty series
-                if all(len(pts) == 0 for pts in series.values()):
+                if all(len(pts["t"]) == 0 for pts in series.values()):
                     dead_entities.append(entity)
 
             for e in dead_entities:
@@ -1133,7 +1170,18 @@ class State:
                     with open(path) as f:
                         data = json.load(f)
                     entity = fname[:-5]  # strip .json
-                    self.timeseries[view][entity] = data.get("series", {})
+                    raw_series = data.get("series", {})
+                    # Migrate old [{t,v},...] format to {t:[],v:[]}
+                    converted = {}
+                    for key, val in raw_series.items():
+                        if isinstance(val, list):
+                            converted[key] = {
+                                "t": [p["t"] for p in val],
+                                "v": [p["v"] for p in val],
+                            }
+                        else:
+                            converted[key] = val
+                    self.timeseries[view][entity] = converted
                 except (json.JSONDecodeError, OSError):
                     log.warning("failed to restore %s", path, exc_info=True)
 
@@ -1162,22 +1210,22 @@ class State:
                     shutil.rmtree(entry.path, ignore_errors=True)
 
 
-def _downsample_hourly(points):
-    """Average points into hourly buckets."""
-    if not points:
-        return []
+def _downsample_hourly(t_arr, v_arr):
+    """Average points into hourly buckets. Returns (out_t, out_v) lists."""
+    if not t_arr:
+        return [], []
     buckets = {}
-    for p in points:
-        hour = p["t"] // 3600 * 3600
+    for i in range(len(t_arr)):
+        hour = t_arr[i] // 3600 * 3600
         if hour not in buckets:
             buckets[hour] = []
-        buckets[hour].append(p["v"])
-    result = []
+        buckets[hour].append(v_arr[i])
+    out_t, out_v = [], []
     for hour in sorted(buckets):
         vals = buckets[hour]
-        avg = sum(vals) / len(vals)
-        result.append({"t": hour, "v": round(avg, 1)})
-    return result
+        out_t.append(hour)
+        out_v.append(round(sum(vals) / len(vals), 1))
+    return out_t, out_v
 
 
 def _atomic_json(path, data):

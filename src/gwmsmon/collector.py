@@ -105,7 +105,7 @@ def main():
         rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
         ts_entities = sum(len(e) for v in state.timeseries.values()
                           for e in v.values())
-        ts_points = sum(len(pts) for v in state.timeseries.values()
+        ts_points = sum(len(pts["t"]) for v in state.timeseries.values()
                         for e in v.values() for pts in e.values())
         log.info("cycle %d completed in %.1fs | RSS=%.0fMB | "
                  "ts_entities=%d ts_points=%d",
@@ -121,6 +121,13 @@ def main():
             end = time.time() + sleep_time
             while time.time() < end and not _shutdown:
                 time.sleep(min(1, end - time.time()))
+
+    log.info("flushing state before shutdown")
+    try:
+        state.flush_timeseries(cfg)
+        state.flush_exit_code_state(cfg)
+    except Exception:
+        log.error("failed to flush on shutdown", exc_info=True)
 
     log.info("shutdown complete")
 

@@ -167,24 +167,25 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
   function seriesMaxTime(series, keys) {
     var maxT = 0;
     (keys || Object.keys(series)).forEach(function(k) {
-      var pts = series[k] || [];
-      if (pts.length) {
-        var t = pts[pts.length - 1].t;
+      var pts = series[k] || {t:[],v:[]};
+      if (pts.t.length) {
+        var t = pts.t[pts.t.length - 1];
         if (t > maxT) maxT = t;
       }
     });
     return maxT;
   }
 
-  // Build aligned uPlot data arrays from {t,v} point arrays.
+  // Build aligned uPlot data arrays from parallel-array series.
   // Returns {data: [...], tMin: N, tMax: N} or null.
   function buildAligned(series, keys, cutoff) {
     // Collect all unique timestamps >= cutoff across all keys
     var tSet = {};
     keys.forEach(function(k) {
-      (series[k] || []).forEach(function(p) {
-        if (p.t >= cutoff) tSet[p.t] = true;
-      });
+      var pts = series[k] || {t:[],v:[]};
+      for (var i = 0; i < pts.t.length; i++) {
+        if (pts.t[i] >= cutoff) tSet[pts.t[i]] = true;
+      }
     });
     var timestamps = Object.keys(tSet).map(Number).sort(function(a,b){return a-b;});
     if (!timestamps.length) return null;
@@ -192,7 +193,10 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     // Build lookup per key
     var lookups = keys.map(function(k) {
       var m = {};
-      (series[k] || []).forEach(function(p) { if (p.t >= cutoff) m[p.t] = p.v; });
+      var pts = series[k] || {t:[],v:[]};
+      for (var i = 0; i < pts.t.length; i++) {
+        if (pts.t[i] >= cutoff) m[pts.t[i]] = pts.v[i];
+      }
       return m;
     });
 
@@ -373,16 +377,19 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
   function globalMaxRatio(series) {
     var maxR = 0;
     PANELS.forEach(function(p) {
-      var cpusPts = series[p.cpusKey] || [];
+      var cpusPts = series[p.cpusKey] || {t:[],v:[]};
+      var jobsPts = series[p.jobsKey] || {t:[],v:[]};
       var jobsMap = {};
-      (series[p.jobsKey] || []).forEach(function(pt) { jobsMap[pt.t] = pt.v; });
-      cpusPts.forEach(function(pt) {
-        var j = jobsMap[pt.t];
-        if (j > 0 && pt.v > 0) {
-          var r = pt.v / j;
+      for (var i = 0; i < jobsPts.t.length; i++) {
+        jobsMap[jobsPts.t[i]] = jobsPts.v[i];
+      }
+      for (var i = 0; i < cpusPts.t.length; i++) {
+        var j = jobsMap[cpusPts.t[i]];
+        if (j > 0 && cpusPts.v[i] > 0) {
+          var r = cpusPts.v[i] / j;
           if (r > maxR) maxR = r;
         }
-      });
+      }
     });
     return maxR;
   }
@@ -619,9 +626,10 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
                     return !el.dataset.chartType;
                   });
                   if (!hasDual) return;
-                  (allData[s][panel.cpusKey] || []).forEach(function(p) {
-                    if (p.v > maxV) maxV = p.v;
-                  });
+                  var _cp = allData[s][panel.cpusKey] || {t:[],v:[]};
+                  for (var _i = 0; _i < _cp.v.length; _i++) {
+                    if (_cp.v[_i] > maxV) maxV = _cp.v[_i];
+                  }
                 });
                 sharedCpusYMax[panel.cpusKey] = alignedCpusMax(maxV);
               });
@@ -638,9 +646,10 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
                 if (!hasSimple) return;
                 var series = allData[s];
                 Object.keys(series).forEach(function(k) {
-                  (series[k] || []).forEach(function(p) {
-                    if (p.v > simpleMaxV) simpleMaxV = p.v;
-                  });
+                  var _sp = series[k] || {t:[],v:[]};
+                  for (var _i = 0; _i < _sp.v.length; _i++) {
+                    if (_sp.v[_i] > simpleMaxV) simpleMaxV = _sp.v[_i];
+                  }
                 });
               });
             }

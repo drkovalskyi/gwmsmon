@@ -48,7 +48,7 @@
 {% set wins = exit_codes.get('windows', {}) if exit_codes else {} %}
 {% set any_completions = wins.get('1h', {}).get('total', 0) > 0 or wins.get('24h', {}).get('total', 0) > 0 or wins.get('7d', {}).get('total', 0) > 0 %}
 {% if any_completions %}
-<details class="section">
+<details class="section" open data-view="{{ view }}">
   <summary><h2>Completion Summary</h2></summary>
   <table class="data-table compact">
     <thead><tr>
@@ -73,7 +73,7 @@
   </table>
 
   {% if exit_codes.get('annotated') %}
-  <h3 style="margin:12px 0 6px;font-size:13px;color:#555">Exit Codes (last hour)</h3>
+  <h3 style="margin:12px 0 6px;font-size:13px;color:var(--text-th)">Exit Codes (last hour)</h3>
   <table class="data-table compact sortable" data-sort-default="2:desc">
     <thead><tr>
       <th data-sort="num">Exit Code</th>

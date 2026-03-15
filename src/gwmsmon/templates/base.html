@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}gwmsmon{% endblock %}</title>
+<script>
+(function(){
+  var m = document.cookie.match(/(?:^|;\s*)theme=(\w+)/);
+  if (m && m[1] === 'dark') document.documentElement.dataset.theme = 'dark';
+})();
+</script>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
@@ -14,6 +20,7 @@
   {% for v, vc in views.items() %}
   <a href="/{{ v }}/" class="{% if v == view %}active{% endif %}">{{ vc.title }}</a>
   {% endfor %}
+  <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">&#9789;</button>
   <span class="freshness" data-updated="{{ updated_ts }}">{{ freshness }}</span>
 </nav>
 <main>

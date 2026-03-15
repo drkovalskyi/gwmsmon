@@ -1,3 +1,30 @@
+// Theme toggle
+function toggleTheme() {
+  var isDark = document.documentElement.dataset.theme === 'dark';
+  if (isDark) {
+    delete document.documentElement.dataset.theme;
+    document.cookie = 'theme=light;path=/;max-age=31536000;SameSite=Lax';
+  } else {
+    document.documentElement.dataset.theme = 'dark';
+    document.cookie = 'theme=dark;path=/;max-age=31536000;SameSite=Lax';
+  }
+  location.reload();
+}
+
+// Details collapse state cookie
+(function() {
+  var details = document.querySelector('details.section[data-view]');
+  if (!details) return;
+  var view = details.dataset.view;
+  var key = 'details_' + view;
+  var m = document.cookie.match(new RegExp('(?:^|;\\s*)' + key + '=(\\d)'));
+  if (m && m[1] === '0') details.removeAttribute('open');
+  details.addEventListener('toggle', function() {
+    var val = details.open ? '1' : '0';
+    document.cookie = key + '=' + val + ';path=/;max-age=31536000;SameSite=Lax';
+  });
+})();
+
 // Freshness indicator — updates every second
 (function() {
   var el = document.querySelector('.freshness');
@@ -82,8 +109,11 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
 // --- uPlot chart rendering ---
 (function() {
   var INTERVALS = { hourly: 3*3600, daily: 24*3600, weekly: 7*24*3600 };
-  var CPUS_COLOR = '#0055D4';
-  var RATIO_COLOR = '#222222';
+  var isDark = document.documentElement.dataset.theme === 'dark';
+  var CPUS_COLOR = isDark ? '#64b5f6' : '#0055D4';
+  var RATIO_COLOR = isDark ? '#aaa' : '#222222';
+  var AXIS_STROKE = isDark ? '#999' : '#888';
+  var AXIS_LABEL_STROKE = isDark ? '#bbb' : '#444';
   var YLIM_PAD = 0.20;
   var CHART_W = 350;
   var CHART_H = 300;
@@ -357,17 +387,20 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     return maxR;
   }
 
-  // Simple 3-line chart colors (colorblind-safe)
+  // Simple 3-line chart colors (colorblind-safe: blue / orange / grey)
+  var RUNNING_COLOR = isDark ? '#5794F2' : '#2166AC';
+  var IDLE_COLOR = isDark ? '#FF9830' : '#E55400';
+  var HELD_COLOR = isDark ? '#B0B0B0' : '#878787';
   var SIMPLE_COLORS = {
-    Running: '#2166AC',
-    Idle: '#D6604D',
-    Held: '#878787',
-    TotalRunning: '#2166AC',
-    TotalIdle: '#D6604D',
-    TotalHeld: '#878787',
-    TotalRunningJobs: '#2166AC',
-    TotalIdleJobs: '#D6604D',
-    TotalHeldJobs: '#878787',
+    Running: RUNNING_COLOR,
+    Idle: IDLE_COLOR,
+    Held: HELD_COLOR,
+    TotalRunning: RUNNING_COLOR,
+    TotalIdle: IDLE_COLOR,
+    TotalHeld: HELD_COLOR,
+    TotalRunningJobs: RUNNING_COLOR,
+    TotalIdleJobs: IDLE_COLOR,
+    TotalHeldJobs: HELD_COLOR,
   };
   var SIMPLE_CHART_H = 240;
 
@@ -378,7 +411,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     if (loader) loader.remove();
 
     var label = document.createElement('div');
-    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:#444;padding:2px 0 0';
+    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:' + AXIS_LABEL_STROKE + ';padding:2px 0 0';
     label.textContent = {hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days'}[el.dataset.interval] || el.dataset.interval;
     el.appendChild(label);
 
@@ -403,7 +436,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     seriesKeys.forEach(function(k, i) {
       uSeries.push({
         scale: 'y',
-        stroke: SIMPLE_COLORS[k] || ['#2166AC','#D6604D','#878787'][i],
+        stroke: SIMPLE_COLORS[k] || [RUNNING_COLOR, IDLE_COLOR, HELD_COLOR][i],
         width: 2,
         label: k,
       });
@@ -422,12 +455,12 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
-        { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: '#888' },
+        { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE },
         {
           scale: 'y',
           size: 50,
           font: '10px sans-serif',
-          stroke: '#444',
+          stroke: AXIS_LABEL_STROKE,
           splits: gridSplits,
           values: function(self, ticks) { return ticks.map(fmtCount); },
         },
@@ -440,15 +473,15 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
 
   // Histogram height matches dual-panel total: PANEL_TOP_H + GAP_H + PANEL_BOT_H
   var HISTOGRAM_H = PANEL_TOP_H + GAP_H + PANEL_BOT_H;
-  var SUCCESS_COLOR = '#4CAF50';
-  var FAILURE_COLOR = '#E53935';
+  var SUCCESS_COLOR = isDark ? '#5794F2' : '#3274D9';
+  var FAILURE_COLOR = isDark ? '#FF9830' : '#E55400';
 
   function renderHistogramChart(el, data) {
     var loader = el.querySelector('.chart-loading');
     if (loader) loader.remove();
 
     var label = document.createElement('div');
-    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:#444;padding:2px 0 0';
+    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:' + AXIS_LABEL_STROKE + ';padding:2px 0 0';
     label.textContent = 'Completions (7 Days)';
     el.appendChild(label);
 
@@ -487,12 +520,12 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
-        { size: XAXIS_H, font: '10px sans-serif', values: fmtDateSplits, stroke: '#888' },
+        { size: XAXIS_H, font: '10px sans-serif', values: fmtDateSplits, stroke: AXIS_STROKE },
         {
           scale: 'y',
           size: 50,
           font: '10px sans-serif',
-          stroke: '#444',
+          stroke: AXIS_LABEL_STROKE,
           splits: gridSplits,
           values: function(self, ticks) { return ticks.map(fmtCount); },
         },
@@ -638,7 +671,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     if (loader) loader.remove();
 
     var label = document.createElement('div');
-    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:#444;padding:2px 0 0';
+    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:' + AXIS_LABEL_STROKE + ';padding:2px 0 0';
     label.textContent = {hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days'}[el.dataset.interval] || el.dataset.interval;
     el.appendChild(label);
 
@@ -684,7 +717,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
         },
         axes: [
           isBottom
-            ? { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: '#888' }
+            ? { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE }
             : { size: 2, values: function() { return []; }, ticks: { show: false } },
           {
             scale: 'cpus',

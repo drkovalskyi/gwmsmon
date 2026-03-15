@@ -873,13 +873,19 @@ class State:
         if fs:
             self._ts_append("globalview", "_fairshare", fs, now)
 
-        # poolview
-        pv_totals = snap["poolview"].get("totals", {})
-        if pv_totals:
+        # poolview — totals computed from schedds (not yet in snapshot)
+        pv_running = 0
+        pv_idle = 0
+        pv_held = 0
+        for sd in snap["poolview"].get("schedds", {}).values():
+            pv_running += sd.get("TotalRunningJobs", 0)
+            pv_idle += sd.get("TotalIdleJobs", 0)
+            pv_held += sd.get("TotalHeldJobs", 0)
+        if pv_running or pv_idle or pv_held:
             self._ts_append("poolview", "_summary", {
-                "TotalRunning": pv_totals.get("TotalRunning", 0),
-                "TotalIdle": pv_totals.get("TotalIdle", 0),
-                "TotalHeld": pv_totals.get("TotalHeld", 0),
+                "TotalRunning": pv_running,
+                "TotalIdle": pv_idle,
+                "TotalHeld": pv_held,
             }, now)
         for schedd_name, sd in snap["poolview"].get("schedds", {}).items():
             self._ts_append("poolview", "schedd:" + schedd_name, {

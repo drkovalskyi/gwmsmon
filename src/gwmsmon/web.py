@@ -368,6 +368,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
         overall_failures = detail.get("failures", 0)
+        detail_windows = detail.get("windows", {})
 
         return render_template(
             "exitcode.html",
@@ -378,6 +379,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             desc=desc,
             total_count=total_count,
             total_failures=overall_failures,
+            detail_windows=detail_windows,
             workflows=workflows,
             sites=sites,
             users=users,

@@ -1,7 +1,8 @@
 """Exit code descriptions for CMS jobs.
 
 Maps HTCondor and WMCore exit codes to human-readable descriptions.
-WM_JOB_ERROR_CODES is copied from WMCore/WMExceptions.py.
+WM_JOB_ERROR_CODES is based on WMCore/WMExceptions.py, supplemented with
+codes from CMSSW EDMException.h and CRABServer.
 """
 
 # fmt: off
@@ -89,7 +90,10 @@ WM_JOB_ERROR_CODES = {
     8032: "Exceeded maximum allowed time (ExceededResourceTime).",
     8033: "Could not write output file (FileWriteError) (usually local disk problem).",
     8034: "FileNameInconsistentWithGUID",
+    8035: "UnavailableAccelerator: requested GPU/accelerator not available on the worker node.",
+    8036: "ExternalFailure: failure in an external tool invoked by the framework.",
     8501: "EventGenerationFailure",
+    8901: "UnexpectedJobTermination: cmsRun terminated abnormally without a classified exception.",
     9000: "cmsRun caught (SIGINT and SIGUSR2) signal.",
     10031: "Directory VO_CMS_SW_DIR not found.",
     10032: "Failed to source CMS Environment setup script such as cmssset_default.sh, grid system or site equivalent script.",
@@ -110,6 +114,7 @@ WM_JOB_ERROR_CODES = {
     50513: "Failure to run SCRAM setup scripts.",
     50660: "Application terminated by wrapper because using too much RAM (PSS).",
     50662: "Application terminated by wrapper because using too much disk.",
+    50663: "Application terminated by wrapper because using more CPU than wall clock time.",
     50664: "Application terminated by wrapper because using too much Wall Clock time.",
     50665: "Application terminated by wrapper because it stay idle too long.",
     50666: "Job removed by condor for unknown reasons.",

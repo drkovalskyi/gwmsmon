@@ -17,7 +17,9 @@ log = logging.getLogger(__name__)
 FULL_RES_SECONDS = int(3.5 * 86400)  # 302400
 HOURLY_RES_SECONDS = 365 * 86400     # 31536000
 PRUNE_INACTIVE_DAYS = 30
-EXIT_CODE_WINDOW = 3600  # 1 hour rolling window for exit codes
+EXIT_CODE_WINDOW = 7 * 86400       # retain 7 days of buckets
+EXIT_CODE_BUCKET = 600              # 10-minute bucket resolution
+EXIT_CODE_WINDOWS = {"1h": 3600, "24h": 86400, "7d": 7 * 86400}
 
 
 def _ensure(d, *keys):
@@ -480,7 +482,7 @@ class State:
             completion = job.get("CompletionDate")
             if not completion:
                 continue
-            minute = int(completion) // 60 * 60
+            minute = int(completion) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
             schedd_type = job.get("_schedd_type", "unknown")
             schedd_name = job.get("_schedd", "unknown")
             site = job.get("MATCH_GLIDEIN_CMSSite", "unknown")
@@ -563,7 +565,7 @@ class State:
 
     def _prune_exit_detail_window(self):
         """Remove exit code detail buckets older than the rolling window."""
-        cutoff = int(time.time()) // 60 * 60 - EXIT_CODE_WINDOW
+        cutoff = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET - EXIT_CODE_WINDOW
         for view, codes in self.exit_code_detail.items():
             dead_codes = []
             for code, buckets in codes.items():
@@ -577,7 +579,7 @@ class State:
 
     def _prune_exit_code_window(self):
         """Remove exit code buckets older than the rolling window."""
-        cutoff = int(time.time()) // 60 * 60 - EXIT_CODE_WINDOW
+        cutoff = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET - EXIT_CODE_WINDOW
         for view, workflows in self.exit_codes.items():
             dead_wfs = []
             for wf, buckets in workflows.items():
@@ -601,6 +603,39 @@ class State:
             result[wf] = totals
         return result
 
+    def _flatten_exit_codes_windowed(self, view, window_seconds):
+        """Flatten buckets within window_seconds into total counts per code."""
+        cutoff = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET - window_seconds
+        overall = {}
+        for wf, buckets in self.exit_codes.get(view, {}).items():
+            for ts, codes in buckets.items():
+                if ts < cutoff:
+                    continue
+                for code, count in codes.items():
+                    overall.setdefault(code, 0)
+                    overall[code] += count
+        return overall
+
+    def _build_completion_histogram(self, view):
+        """Build per-bucket success/failure counts for histogram chart."""
+        bucket_totals = {}  # {timestamp: {"success": N, "failure": N}}
+        for wf, buckets in self.exit_codes.get(view, {}).items():
+            for ts, codes in buckets.items():
+                if ts not in bucket_totals:
+                    bucket_totals[ts] = {"success": 0, "failure": 0}
+                for code, count in codes.items():
+                    if code == "0":
+                        bucket_totals[ts]["success"] += count
+                    else:
+                        bucket_totals[ts]["failure"] += count
+        timestamps = sorted(bucket_totals.keys())
+        return {
+            "bucket_size": EXIT_CODE_BUCKET,
+            "timestamps": timestamps,
+            "success": [bucket_totals[t]["success"] for t in timestamps],
+            "failure": [bucket_totals[t]["failure"] for t in timestamps],
+        }
+
     def flush_exit_codes(self, cfg):
         """Write exit code JSON files for each view."""
         for view in ("prodview", "analysisview", "globalview"):
@@ -610,27 +645,40 @@ class State:
 
             flat = self._flatten_exit_codes(view)
 
-            # Overall exit code summary
-            overall = {}
-            total_jobs = 0
-            total_failures = 0
-            for codes in flat.values():
-                for code, count in codes.items():
-                    overall.setdefault(code, 0)
-                    overall[code] += count
-                    total_jobs += count
-                    if code != "0":
-                        total_failures += count
+            # Multi-window stats
+            windows = {}
+            for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                wcodes = self._flatten_exit_codes_windowed(view, wsec)
+                wtotal = sum(wcodes.values())
+                wfail = sum(v for k, v in wcodes.items() if k != "0")
+                windows[wlabel] = {
+                    "total": wtotal,
+                    "failures": wfail,
+                    "failure_rate": (round(wfail / wtotal, 4)
+                                     if wtotal else 0),
+                    "codes": wcodes,
+                }
 
+            # Backward-compat top-level from 1h window
+            w1h = windows.get("1h", {})
             _atomic_json(os.path.join(basedir, "exit_codes.json"), {
                 "updated": self.updated,
-                "window": EXIT_CODE_WINDOW,
-                "total": total_jobs,
-                "failures": total_failures,
-                "failure_rate": (round(total_failures / total_jobs, 4)
-                                 if total_jobs else 0),
-                "codes": overall,
+                "window": EXIT_CODE_WINDOWS["1h"],
+                "total": w1h.get("total", 0),
+                "failures": w1h.get("failures", 0),
+                "failure_rate": w1h.get("failure_rate", 0),
+                "codes": w1h.get("codes", {}),
+                "windows": windows,
             })
+
+            # Completion histogram
+            histogram = self._build_completion_histogram(view)
+            histogram["updated"] = self.updated
+            _atomic_json(os.path.join(basedir, "completion_histogram.json"),
+                         histogram)
+
+            total_jobs = w1h.get("total", 0)
+            total_failures = w1h.get("failures", 0)
 
             # Per-workflow exit code files
             for wf, codes in flat.items():
@@ -649,22 +697,27 @@ class State:
 
             # Per-workflow totals (all codes) for failure rate context
             wf_totals = {}  # {wf: total_completed}
-            wf_failures = {}  # {wf: total_failures}
+            wf_failures_map = {}  # {wf: total_failures}
             for wf, codes in flat.items():
                 wf_totals[wf] = sum(codes.values())
-                wf_failures[wf] = sum(v for k, v in codes.items()
-                                      if k != "0")
+                wf_failures_map[wf] = sum(v for k, v in codes.items()
+                                          if k != "0")
 
             # Per-code detail files (workflows, sites, users breakdown)
             ec_dir = os.path.join(basedir, "_exitcodes")
             os.makedirs(ec_dir, exist_ok=True)
+            now_bucket = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
             view_detail = self.exit_code_detail.get(view, {})
             for code, buckets in view_detail.items():
                 workflows_agg = {}
                 sites_agg = {}
                 users_agg = {}
                 code_total = 0
-                for mb in buckets.values():
+                # Per-window counts for this code
+                code_windows = {}
+                for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                    code_windows[wlabel] = 0
+                for ts, mb in buckets.items():
                     for wf, n in mb.get("workflows", {}).items():
                         workflows_agg.setdefault(wf, 0)
                         workflows_agg[wf] += n
@@ -675,12 +728,17 @@ class State:
                     for u, n in mb.get("users", {}).items():
                         users_agg.setdefault(u, 0)
                         users_agg[u] += n
+                    bucket_count = sum(mb.get("workflows", {}).values())
+                    for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                        if ts >= now_bucket - wsec:
+                            code_windows[wlabel] += bucket_count
                 safe_code = code.replace(":", "_")
                 _atomic_json(os.path.join(ec_dir,
                                           "{}.json".format(safe_code)), {
                     "updated": self.updated,
                     "code": code,
                     "total": code_total,
+                    "windows": code_windows,
                     "workflows": workflows_agg,
                     "wf_totals": {wf: wf_totals.get(wf, 0)
                                   for wf in workflows_agg},
@@ -688,7 +746,7 @@ class State:
                     "users": users_agg,
                 })
 
-            # _all.json — all completed jobs, per-workflow breakdown
+            # _all.json — all completed jobs (full 7d window)
             all_workflows = {}
             all_sites = {}
             all_users = {}
@@ -703,13 +761,16 @@ class State:
                     for u, n in mb.get("users", {}).items():
                         all_users.setdefault(u, 0)
                         all_users[u] += n
+            all_total = sum(all_workflows.values())
+            all_fail = sum(wf_failures_map.values())
             _atomic_json(os.path.join(ec_dir, "_all.json"), {
                 "updated": self.updated,
-                "total": total_jobs,
-                "failures": total_failures,
+                "total": all_total,
+                "failures": all_fail,
+                "windows": windows,
                 "workflows": all_workflows,
                 "wf_totals": wf_totals,
-                "wf_failures": wf_failures,
+                "wf_failures": wf_failures_map,
                 "sites": all_sites,
                 "users": all_users,
             })
@@ -744,9 +805,16 @@ class State:
             for view, workflows in raw.items():
                 self.exit_codes[view] = {}
                 for wf, buckets in workflows.items():
-                    self.exit_codes[view][wf] = {
-                        int(ts): codes for ts, codes in buckets.items()
-                    }
+                    # Re-bucket old 1-minute timestamps to EXIT_CODE_BUCKET
+                    merged = {}
+                    for ts, codes in buckets.items():
+                        aligned = int(ts) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
+                        if aligned not in merged:
+                            merged[aligned] = {}
+                        for code, count in codes.items():
+                            merged[aligned].setdefault(code, 0)
+                            merged[aligned][code] += count
+                    self.exit_codes[view][wf] = merged
             self._prune_exit_code_window()
             total_wf = sum(len(wfs) for wfs in self.exit_codes.values())
             log.info("restored exit code state: %d watermarks, %d workflows",

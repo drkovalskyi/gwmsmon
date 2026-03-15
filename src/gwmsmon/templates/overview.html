@@ -24,42 +24,76 @@
     <div class="stat-value">{{ workflows|length|fmt }}</div>
     <div class="stat-label">{{ view_cfg.entity_label }}s</div>
   </div>
+  {% if exit_codes and exit_codes.get('total', 0) > 0 %}
+  <a href="/{{ view }}/completed" class="stat" style="text-decoration:none">
+    <div class="stat-value">{{ exit_codes.total|fmt }}</div>
+    <div class="stat-label">Completed (1h)</div>
+  </a>
+  <a href="/{{ view }}/completed" class="stat" style="text-decoration:none">
+    <div class="stat-value {% if exit_codes.failure_rate > 0.05 %}warn{% endif %}">
+      {{ (exit_codes.failure_rate * 100)|round(1) }}%
+    </div>
+    <div class="stat-label">Failed (1h)</div>
+  </a>
+  {% endif %}
 </div>
 
 <div class="graphs-row">
   <div class="chart" data-src="/{{ view }}/tsdata/summary" data-interval="hourly"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/summary" data-interval="daily"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/summary" data-interval="weekly"></div>
+  <div class="chart" data-src="/{{ view }}/json/completion_histogram.json" data-chart-type="histogram"></div>
 </div>
 
-{% if exit_codes and exit_codes.get('total', 0) > 0 %}
-<div class="section">
-  <h2>Exit Codes (last hour)</h2>
-  <div class="stats-row">
-    <div class="stat">
-      <div class="stat-value">{{ exit_codes.total|fmt }}</div>
-      <div class="stat-label">Completed</div>
-    </div>
-    <div class="stat">
-      <div class="stat-value {% if exit_codes.failure_rate > 0.05 %}warn{% endif %}">
-        {{ (exit_codes.failure_rate * 100)|round(1) }}%
-      </div>
-      <div class="stat-label">Failure Rate</div>
-    </div>
-  </div>
-  {% if exit_codes.get('annotated') %}
+{% set wins = exit_codes.get('windows', {}) if exit_codes else {} %}
+{% set any_completions = wins.get('1h', {}).get('total', 0) > 0 or wins.get('24h', {}).get('total', 0) > 0 or wins.get('7d', {}).get('total', 0) > 0 %}
+{% if any_completions %}
+<details class="section">
+  <summary><h2>Completion Summary</h2></summary>
   <table class="data-table compact">
-    <thead><tr><th>Exit Code</th><th>Description</th><th>Count</th></tr></thead>
+    <thead><tr>
+      <th>Window</th>
+      <th data-sort="num">Completed</th>
+      <th data-sort="num">Failed</th>
+      <th data-sort="num">Failure Rate</th>
+    </tr></thead>
+    <tbody>
+    {% for wlabel in ['1h', '24h', '7d'] %}
+    {% set w = wins.get(wlabel, {}) %}
+    {% if w.get('total', 0) > 0 %}
+    <tr>
+      <td>{{ wlabel }}</td>
+      <td>{{ w.total|fmt }}</td>
+      <td>{{ w.failures|fmt }}</td>
+      <td class="{% if w.failure_rate > 0.05 %}warn{% endif %}">{{ (w.failure_rate * 100)|round(1) }}%</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {% if exit_codes.get('annotated') %}
+  <h3 style="margin:12px 0 6px;font-size:13px;color:#555">Exit Codes (last hour)</h3>
+  <table class="data-table compact sortable" data-sort-default="2:desc">
+    <thead><tr>
+      <th data-sort="num">Exit Code</th>
+      <th>Description</th>
+      <th data-sort="num">Count</th>
+    </tr></thead>
     <tbody>
     {% for entry in exit_codes.annotated %}
     {% if entry.code != '0' %}
-    <tr><td>{{ entry.code }}</td><td>{{ entry.desc }}</td><td>{{ entry.count|fmt }}</td></tr>
+    <tr>
+      <td><a href="/{{ view }}/exitcode/{{ entry.code }}">{{ entry.code }}</a></td>
+      <td>{{ entry.desc }}</td>
+      <td>{{ entry.count|fmt }}</td>
+    </tr>
     {% endif %}
     {% endfor %}
     </tbody>
   </table>
   {% endif %}
-</div>
+</details>
 {% endif %}
 
 <div class="section">

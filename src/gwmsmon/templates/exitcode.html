@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — {{ view_cfg.title }} — gwmsmon{% endblock %}
+{% block content %}
+<h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / {{ title }}</h1>
+
+<div class="stats-row">
+  {% if code %}
+  <div class="stat">
+    <div class="stat-value">{{ code }}</div>
+    <div class="stat-label">Exit Code</div>
+  </div>
+  {% endif %}
+  {% if desc %}
+  <div class="stat">
+    <div class="stat-value" style="font-size:14px">{{ desc }}</div>
+    <div class="stat-label">Description</div>
+  </div>
+  {% endif %}
+</div>
+
+{% if detail_windows %}
+<table class="data-table compact" style="margin-bottom:16px">
+  <thead><tr>
+    <th>Window</th>
+    {% if code %}
+    <th data-sort="num">Count</th>
+    {% else %}
+    <th data-sort="num">Completed</th>
+    <th data-sort="num">Failed</th>
+    <th data-sort="num">Failure Rate</th>
+    {% endif %}
+  </tr></thead>
+  <tbody>
+  {% for wlabel in ['1h', '24h', '7d'] %}
+  {% set wval = detail_windows.get(wlabel, {}) if detail_windows.get(wlabel) is mapping else detail_windows.get(wlabel, 0) %}
+  <tr>
+    <td>{{ wlabel }}</td>
+    {% if code %}
+    <td>{{ wval|fmt }}</td>
+    {% else %}
+    <td>{{ wval.get('total', 0)|fmt }}</td>
+    <td>{{ wval.get('failures', 0)|fmt }}</td>
+    {% set wrate = wval.get('failure_rate', 0) %}
+    <td class="{% if wrate > 0.05 %}warn{% endif %}">{{ (wrate * 100)|round(1) }}%</td>
+    {% endif %}
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if workflows %}
+<div class="section">
+  <h2>{{ view_cfg.entity_label }}s ({{ workflows|length }})</h2>
+  <input type="text" class="table-filter" placeholder="Filter..." data-table="wf-table">
+  <div class="table-scroll">
+  <table class="data-table sortable" id="wf-table" data-sort-default="1:desc">
+    <thead>
+      <tr>
+        <th>{{ view_cfg.entity_label }}</th>
+        {% if code %}
+        <th data-sort="num">Count</th>
+        {% endif %}
+        <th data-sort="num">Completed</th>
+        <th data-sort="num">Failed</th>
+        <th data-sort="num">Failure %</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for wf in workflows %}
+    <tr>
+      <td><a href="/{{ view }}/request/{{ wf.name }}">{{ wf.name }}</a></td>
+      {% if code %}
+      <td>{{ wf.count|fmt }}</td>
+      {% endif %}
+      <td>{{ wf.total|fmt }}</td>
+      <td>{{ wf.failures|fmt }}</td>
+      <td class="{% if wf.rate > 5 %}warn{% endif %}">{{ wf.rate }}%</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+{% if sites %}
+<div class="section">
+  <h2>Sites ({{ sites|length }})</h2>
+  <div class="table-scroll">
+  <table class="data-table sortable" data-sort-default="1:desc">
+    <thead>
+      <tr>
+        <th>Site</th>
+        <th data-sort="num">Count</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for s in sites %}
+    <tr>
+      <td><a href="/{{ view }}/site/{{ s.name }}">{{ s.name }}</a></td>
+      <td>{{ s.count|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+{% if users %}
+<div class="section">
+  <h2>Users ({{ users|length }})</h2>
+  <div class="table-scroll">
+  <table class="data-table sortable" data-sort-default="1:desc">
+    <thead>
+      <tr>
+        <th>User</th>
+        <th data-sort="num">Count</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.name }}</td>
+      <td>{{ u.count|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

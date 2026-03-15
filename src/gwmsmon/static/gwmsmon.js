@@ -81,11 +81,11 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
 
 // --- uPlot chart rendering ---
 (function() {
-  var INTERVALS = { hourly: 3*3600, daily: 24*3600, weekly: 7*86400 };
+  var INTERVALS = { hourly: 3*3600, daily: 24*3600, weekly: 7*24*3600 };
   var CPUS_COLOR = '#0055D4';
   var RATIO_COLOR = '#222222';
   var YLIM_PAD = 0.20;
-  var CHART_W = 420;
+  var CHART_W = 350;
   var CHART_H = 300;
   var LABEL_H = 18;
   var GAP_H = 8;
@@ -133,7 +133,21 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     });
   }
 
-  // Build aligned uPlot data arrays from {t,v} point arrays
+  // Find the latest timestamp across all series keys
+  function seriesMaxTime(series, keys) {
+    var maxT = 0;
+    (keys || Object.keys(series)).forEach(function(k) {
+      var pts = series[k] || [];
+      if (pts.length) {
+        var t = pts[pts.length - 1].t;
+        if (t > maxT) maxT = t;
+      }
+    });
+    return maxT;
+  }
+
+  // Build aligned uPlot data arrays from {t,v} point arrays.
+  // Returns {data: [...], tMin: N, tMax: N} or null.
   function buildAligned(series, keys, cutoff) {
     // Collect all unique timestamps >= cutoff across all keys
     var tSet = {};
@@ -161,7 +175,52 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
       }
       data.push(arr);
     });
-    return data;
+    return {data: data, tMin: timestamps[0], tMax: timestamps[timestamps.length - 1]};
+  }
+
+  // Downsample aligned data arrays by averaging into fixed-size time buckets.
+  // aligned = {data: [timestamps, series1, ...], tMin, tMax}
+  // bucketSec = target bucket width in seconds
+  function downsampleAligned(aligned, bucketSec) {
+    var src = aligned.data;
+    var tsArr = src[0];
+    var nSeries = src.length - 1;
+    if (tsArr.length <= 1) return aligned;
+
+    // Group indices into buckets
+    var buckets = [];
+    var curBucket = Math.floor(tsArr[0] / bucketSec) * bucketSec;
+    var curStart = 0;
+    for (var i = 0; i < tsArr.length; i++) {
+      var b = Math.floor(tsArr[i] / bucketSec) * bucketSec;
+      if (b !== curBucket) {
+        buckets.push({t: curBucket + bucketSec / 2, start: curStart, end: i});
+        curBucket = b;
+        curStart = i;
+      }
+    }
+    buckets.push({t: curBucket + bucketSec / 2, start: curStart, end: tsArr.length});
+
+    var outTs = new Float64Array(buckets.length);
+    var outSeries = [];
+    for (var s = 0; s < nSeries; s++) outSeries.push(new Float64Array(buckets.length));
+
+    for (var bi = 0; bi < buckets.length; bi++) {
+      var bk = buckets[bi];
+      outTs[bi] = bk.t;
+      for (var s = 0; s < nSeries; s++) {
+        var sum = 0, cnt = 0;
+        for (var j = bk.start; j < bk.end; j++) {
+          var v = src[s + 1][j];
+          if (!isNaN(v)) { sum += v; cnt++; }
+        }
+        outSeries[s][bi] = cnt > 0 ? sum / cnt : NaN;
+      }
+    }
+
+    var out = [outTs];
+    for (var s = 0; s < nSeries; s++) out.push(outSeries[s]);
+    return {data: out, tMin: aligned.tMin, tMax: aligned.tMax};
   }
 
   // Compute cores/job ratio array from cpus and jobs arrays
@@ -320,24 +379,27 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
 
     var label = document.createElement('div');
     label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:#444;padding:2px 0 0';
-    label.textContent = el.dataset.interval.charAt(0).toUpperCase() + el.dataset.interval.slice(1);
+    label.textContent = {hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days'}[el.dataset.interval] || el.dataset.interval;
     el.appendChild(label);
-
-    var now = Date.now() / 1000;
-    var cutoff = now - interval;
 
     // Detect series keys (first 3 non-timestamp keys)
     var seriesKeys = Object.keys(series).slice(0, 3);
     if (!seriesKeys.length) return;
 
-    var aligned = buildAligned(series, seriesKeys, cutoff);
+    // Derive x-range from data: latest point is the right edge
+    var xMax = seriesMaxTime(series, seriesKeys);
+    if (!xMax) return;
+    var xMin = xMax - interval;
+
+    var aligned = buildAligned(series, seriesKeys, xMin);
     if (!aligned) return;
+    if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
 
     var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
     var yMax = sharedSimpleYMax || alignedCpusMax(1);
 
     var uSeries = [{}];
-    var dataArrays = [aligned[0]];
+    var dataArrays = [aligned.data[0]];
     seriesKeys.forEach(function(k, i) {
       uSeries.push({
         scale: 'y',
@@ -345,7 +407,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
         width: 2,
         label: k,
       });
-      dataArrays.push(aligned[i + 1]);
+      dataArrays.push(aligned.data[i + 1]);
     });
 
     var opts = {
@@ -356,7 +418,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
       padding: [4, 8, 2, LEFT_PAD],
       plugins: [tooltipPlugin()],
       scales: {
-        x: { min: cutoff, max: now },
+        x: { min: aligned.tMin, max: aligned.tMax },
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
@@ -376,17 +438,103 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     new uPlot(opts, dataArrays, el);
   }
 
+  // Histogram height matches dual-panel total: PANEL_TOP_H + GAP_H + PANEL_BOT_H
+  var HISTOGRAM_H = PANEL_TOP_H + GAP_H + PANEL_BOT_H;
+  var SUCCESS_COLOR = '#4CAF50';
+  var FAILURE_COLOR = '#E53935';
+
+  function renderHistogramChart(el, data) {
+    var loader = el.querySelector('.chart-loading');
+    if (loader) loader.remove();
+
+    var label = document.createElement('div');
+    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:#444;padding:2px 0 0';
+    label.textContent = 'Completions (7 Days)';
+    el.appendChild(label);
+
+    var ts = data.timestamps;
+    var success = data.success;
+    var failure = data.failure;
+    if (!ts || !ts.length) return;
+
+    // Build uPlot data: [timestamps, total (success+failure), failure]
+    var timestamps = new Float64Array(ts);
+    var totalArr = new Float64Array(ts.length);
+    var failArr = new Float64Array(ts.length);
+    for (var i = 0; i < ts.length; i++) {
+      totalArr[i] = (success[i] || 0) + (failure[i] || 0);
+      failArr[i] = failure[i] || 0;
+    }
+
+    var yMax = alignedCpusMax(arrMax(totalArr));
+    var bucketSize = data.bucket_size || 600;
+
+    // Fixed 7-day x-range: right edge = last bucket + size, left edge = 168h before
+    var xMax = ts[ts.length - 1] + bucketSize;
+    var xMin = xMax - 7 * 86400;
+
+    var barOpts = uPlot.paths.bars({size: [0.8, 100]});
+
+    var opts = {
+      width: CHART_W,
+      height: HISTOGRAM_H,
+      cursor: { show: true },
+      legend: { show: false },
+      padding: [4, 8, 2, LEFT_PAD],
+      plugins: [tooltipPlugin()],
+      scales: {
+        x: { min: xMin, max: xMax },
+        y: { min: 0, max: yMax, auto: false },
+      },
+      axes: [
+        { size: XAXIS_H, font: '10px sans-serif', values: fmtDateSplits, stroke: '#888' },
+        {
+          scale: 'y',
+          size: 50,
+          font: '10px sans-serif',
+          stroke: '#444',
+          splits: gridSplits,
+          values: function(self, ticks) { return ticks.map(fmtCount); },
+        },
+      ],
+      series: [
+        {},
+        {
+          scale: 'y',
+          stroke: SUCCESS_COLOR,
+          fill: SUCCESS_COLOR + '99',
+          width: 0,
+          label: 'Success',
+          paths: barOpts,
+        },
+        {
+          scale: 'y',
+          stroke: FAILURE_COLOR,
+          fill: FAILURE_COLOR + '99',
+          width: 0,
+          label: 'Failure',
+          paths: barOpts,
+        },
+      ],
+    };
+
+    new uPlot(opts, [timestamps, totalArr, failArr], el);
+  }
+
   function renderCharts() {
     var charts = document.querySelectorAll('.chart');
     if (!charts.length) return;
 
-    // Separate simple and dual-panel charts
+    // Separate chart types
     var simpleCharts = [];
     var dualCharts = [];
+    var histogramCharts = [];
     charts.forEach(function(el) {
       el.innerHTML = '<div class="chart-loading">Loading...</div>';
       if (el.dataset.chartType === 'simple') {
         simpleCharts.push(el);
+      } else if (el.dataset.chartType === 'histogram') {
+        histogramCharts.push(el);
       } else {
         dualCharts.push(el);
       }
@@ -403,12 +551,18 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     // Fetch all data, then render
     var pending = Object.keys(groups).length;
     var allData = {};
+    var rawData = {};
 
     Object.keys(groups).forEach(function(src) {
       fetch(src)
         .then(function(r) { return r.ok ? r.json() : null; })
         .then(function(data) {
-          if (data && data.series) allData[src] = data.series;
+          if (!data) return;
+          if (data.series) {
+            allData[src] = data.series;
+          } else {
+            rawData[src] = data;
+          }
         })
         .catch(function() {})
         .finally(function() {
@@ -419,9 +573,8 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
             var sharedCpusYMax = {};
             if (dualCharts.length) {
               Object.keys(allData).forEach(function(s) {
-                // Only include data from dual-panel chart sources
                 var hasDual = groups[s].some(function(el) {
-                  return el.dataset.chartType !== 'simple';
+                  return !el.dataset.chartType;
                 });
                 if (!hasDual) return;
                 var mr = globalMaxRatio(allData[s]);
@@ -431,7 +584,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
                 var maxV = 0;
                 Object.keys(allData).forEach(function(s) {
                   var hasDual = groups[s].some(function(el) {
-                    return el.dataset.chartType !== 'simple';
+                    return !el.dataset.chartType;
                   });
                   if (!hasDual) return;
                   (allData[s][panel.cpusKey] || []).forEach(function(p) {
@@ -463,13 +616,13 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
 
             // Render all charts
             Object.keys(groups).forEach(function(s) {
-              var series = allData[s];
-              if (!series) return;
               groups[s].forEach(function(el) {
-                if (el.dataset.chartType === 'simple') {
-                  renderSimpleChart(el, series, sharedSimpleYMax);
+                if (el.dataset.chartType === 'histogram') {
+                  if (rawData[s]) renderHistogramChart(el, rawData[s]);
+                } else if (el.dataset.chartType === 'simple') {
+                  if (allData[s]) renderSimpleChart(el, allData[s], sharedSimpleYMax);
                 } else {
-                  renderChartWithSharedScale(el, series, sharedRatioYMax, sharedCpusYMax);
+                  if (allData[s]) renderChartWithSharedScale(el, allData[s], sharedRatioYMax, sharedCpusYMax);
                 }
               });
             });
@@ -486,8 +639,14 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
 
     var label = document.createElement('div');
     label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:#444;padding:2px 0 0';
-    label.textContent = el.dataset.interval.charAt(0).toUpperCase() + el.dataset.interval.slice(1);
+    label.textContent = {hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days'}[el.dataset.interval] || el.dataset.interval;
     el.appendChild(label);
+
+    // Derive x-range from data: latest point is the right edge
+    var xMax = seriesMaxTime(series);
+    if (!xMax) return;
+    var xMin = xMax - interval;
+    var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
 
     PANELS.forEach(function(panel, panelIdx) {
       var isBottom = (panelIdx === PANELS.length - 1);
@@ -499,20 +658,17 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
         el.appendChild(spacer);
       }
 
-      var now = Date.now() / 1000;
-      var cutoff = now - interval;
       var keys = [panel.cpusKey, panel.jobsKey];
-      var aligned = buildAligned(series, keys, cutoff);
+      var aligned = buildAligned(series, keys, xMin);
       if (!aligned) return;
+      if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
 
-      var timestamps = aligned[0];
-      var cpusArr = aligned[1];
-      var jobsArr = aligned[2];
+      var timestamps = aligned.data[0];
+      var cpusArr = aligned.data[1];
+      var jobsArr = aligned.data[2];
       var ratioArr = computeRatio(cpusArr, jobsArr);
 
       var cpusYMax = sharedCpusYMax[panel.cpusKey];
-
-      var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
 
       var opts = {
         width: CHART_W,
@@ -522,7 +678,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
         padding: [4, 4, isBottom ? 2 : 0, LEFT_PAD],
         plugins: [tooltipPlugin(), rightLabelPlugin('cores/job', RATIO_COLOR)],
         scales: {
-          x: { min: cutoff, max: now },
+          x: { min: aligned.tMin, max: aligned.tMax },
           cpus: { min: 0, max: cpusYMax, auto: false },
           ratio: { min: 0, max: sharedRatioYMax, auto: false },
         },

@@ -310,11 +310,13 @@ def _parse_factory_urls(factory_urls_str):
 
 
 def _fetch_xml(url, timeout=30):
-    """Fetch and parse an XML document from a URL (XXE-safe)."""
+    """Fetch and parse an XML document from a URL.
+
+    Note: xml.etree.ElementTree does not expand external entities,
+    so it is safe against XXE by default (unlike lxml).
+    """
     resp = urlopen(url, timeout=timeout)
-    parser = ElementTree.XMLParser()
-    parser.entity = {}  # reject all entity declarations
-    return ElementTree.parse(resp, parser=parser)
+    return ElementTree.parse(resp)
 
 
 def _parse_descript_xml(tree):

@@ -1160,6 +1160,7 @@ class State:
                 path = os.path.join(ts_dir, f"{safe_name}.json")
                 _atomic_json(path, {
                     "updated": self.updated,
+                    "entity": entity,
                     "series": series,
                 })
 
@@ -1180,7 +1181,8 @@ class State:
                 try:
                     with open(path) as f:
                         data = json.load(f)
-                    entity = fname[:-5]  # strip .json
+                    # Use stored entity name; fall back to filename
+                    entity = data.get("entity", fname[:-5])
                     raw_series = data.get("series", {})
                     # Migrate old [{t,v},...] format to {t:[],v:[]}
                     converted = {}
@@ -1192,7 +1194,18 @@ class State:
                             }
                         else:
                             converted[key] = val
-                    self.timeseries[view][entity] = converted
+                    # Merge if entity already loaded (e.g. duplicate
+                    # files from old mangled-name bug)
+                    if entity in self.timeseries[view]:
+                        existing = self.timeseries[view][entity]
+                        for key, pts in converted.items():
+                            if key in existing:
+                                existing[key]["t"].extend(pts["t"])
+                                existing[key]["v"].extend(pts["v"])
+                            else:
+                                existing[key] = pts
+                    else:
+                        self.timeseries[view][entity] = converted
                 except (json.JSONDecodeError, OSError):
                     log.warning("failed to restore %s", path, exc_info=True)
 

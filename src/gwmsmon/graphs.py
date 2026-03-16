@@ -105,7 +105,10 @@ def render_graph(basedir, spec):
 
     # Resolve timeseries file path
     safe_name = entity.replace("/", "_").replace(":", "_")
-    ts_path = os.path.join(basedir, "timeseries", safe_name + ".json")
+    ts_dir = os.path.join(basedir, "timeseries")
+    ts_path = os.path.realpath(os.path.join(ts_dir, safe_name + ".json"))
+    if not ts_path.startswith(os.path.realpath(ts_dir) + os.sep):
+        return None
 
     # Check file mtime for cache validity
     try:

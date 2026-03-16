@@ -19,6 +19,18 @@ from gwmsmon.exitcodes import describe as _describe_exit_code
 
 log = logging.getLogger(__name__)
 
+
+def _safe_path(basedir, untrusted):
+    """Resolve untrusted path and verify it stays within basedir.
+
+    Returns the resolved path, or calls abort(404) on traversal.
+    """
+    resolved = os.path.realpath(os.path.join(basedir, untrusted))
+    if not resolved.startswith(os.path.realpath(basedir) + os.sep) and \
+       resolved != os.path.realpath(basedir):
+        abort(404)
+    return resolved
+
 # View registry — all views share the same page structure,
 # differing only in data and display options.
 VIEWS = {
@@ -115,6 +127,21 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
     app.jinja_env.filters["fmt"] = _format_number
     app.jinja_env.globals["views"] = VIEWS
 
+    @app.after_request
+    def _security_headers(resp):
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' https://cdn.jsdelivr.net; "
+            "img-src 'self' data:; "
+            "frame-ancestors 'none'"
+        )
+        return resp
+
     # --- Routes ---
 
     @app.route("/")
@@ -205,7 +232,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             abort(404)
 
         subtasks = workflows[name]
-        req_dir = os.path.join(basedir, name.replace("/", os.sep))
+        req_dir = _safe_path(basedir, name.replace("/", os.sep))
         exit_codes = _annotate_exit_codes(
             _load_json(req_dir, "exit_codes.json"))
         detail = _load_json(req_dir, "detail.json")
@@ -329,6 +356,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             desc = ""
         else:
             safe_code = code.replace(":", "_")
+            _safe_path(ec_dir, "{}.json".format(safe_code))
             detail = _load_json(ec_dir, "{}.json".format(safe_code))
             title = "Exit Code {}".format(code)
             desc = _describe_exit_code(code)
@@ -408,6 +436,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             abort(404)
 
         ts_dir = os.path.join(basedir, "timeseries")
+        _safe_path(ts_dir, filename)
         resp = send_from_directory(
             ts_dir, filename, mimetype="application/json",
         )
@@ -423,6 +452,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         basedir = cfg.get(view, "basedir")
         if not filename.endswith(".json"):
             filename += ".json"
+        _safe_path(basedir, filename)
         return send_from_directory(
             basedir, filename, mimetype="application/json",
         )
@@ -504,7 +534,7 @@ def _factoryview_overview(cfg):
 
 def _factoryview_site_detail(cfg, name):
     basedir = cfg.get("factoryview", "basedir")
-    site_dir = os.path.join(basedir, name)
+    site_dir = _safe_path(basedir, name)
     site_data = _load_json(site_dir, "summary.json")
     if not site_data:
         abort(404)

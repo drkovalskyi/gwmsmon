@@ -165,10 +165,13 @@ def _render_timeseries(series, interval, title):
     # gives a consistent right y-axis across hourly/daily/weekly plots.
     global_max_ratio = 0
     for _, cpus_key, jobs_key in PANELS:
-        cpus_by_t = {p["t"]: p["v"] for p in series.get(cpus_key, [])}
-        for p in series.get(jobs_key, []):
-            jobs = p["v"]
-            cpus = cpus_by_t.get(p["t"])
+        cpus_pts = series.get(cpus_key, {"t": [], "v": []})
+        jobs_pts = series.get(jobs_key, {"t": [], "v": []})
+        cpus_by_t = {cpus_pts["t"][i]: cpus_pts["v"][i]
+                     for i in range(len(cpus_pts["t"]))}
+        for i in range(len(jobs_pts["t"])):
+            jobs = jobs_pts["v"][i]
+            cpus = cpus_by_t.get(jobs_pts["t"][i])
             if cpus and jobs and jobs > 0:
                 global_max_ratio = max(global_max_ratio, cpus / jobs)
     ratio_ymax = max(global_max_ratio, 1) * (1 + YLIM_PAD)
@@ -186,14 +189,16 @@ def _render_timeseries(series, interval, title):
     axes = [ax_top, ax_bot]
     for ax, (label, cpus_key, jobs_key) in zip(axes, PANELS):
         # Filter CPU series
-        cpus_pts = series.get(cpus_key, [])
-        cpus_filtered = [(p["t"], p["v"]) for p in cpus_pts
-                         if p["t"] >= cutoff]
+        cpus_raw = series.get(cpus_key, {"t": [], "v": []})
+        cpus_filtered = [(cpus_raw["t"][i], cpus_raw["v"][i])
+                         for i in range(len(cpus_raw["t"]))
+                         if cpus_raw["t"][i] >= cutoff]
 
         # Filter jobs series (for cores/job ratio)
-        jobs_pts = series.get(jobs_key, [])
-        jobs_filtered = {p["t"]: p["v"] for p in jobs_pts
-                         if p["t"] >= cutoff}
+        jobs_raw = series.get(jobs_key, {"t": [], "v": []})
+        jobs_filtered = {jobs_raw["t"][i]: jobs_raw["v"][i]
+                         for i in range(len(jobs_raw["t"]))
+                         if jobs_raw["t"][i] >= cutoff}
 
         if cpus_filtered:
             has_data = True

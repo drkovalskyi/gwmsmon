@@ -289,11 +289,17 @@ class State:
 
         # Task identifier fallback chain
         dagman_id = job.get("DAGManJobId")
+        condora_req = job.get("CONDORA_RequestName")
         task = (job.get("CRAB_ReqName")
                 or job.get("WMAgent_RequestName")
+                or condora_req
                 or (f"{schedd_name}#{dagman_id}" if dagman_id else None)
                 or job.get("SubmitFile")
                 or "unknown")
+        # CONDORA subtask: append round to task name
+        condora_round = job.get("CONDORA_Round")
+        if condora_req and condora_round is not None:
+            task = f"{task}/{condora_round}"
 
         # users[owner][task]["Summary"]
         st = _ensure(view["users"], owner, task, "Summary")
@@ -530,12 +536,17 @@ class State:
 
             owner = job.get("Owner", "unknown")
             dagman_id = job.get("DAGManJobId")
+            condora_req = job.get("CONDORA_RequestName")
             task = (job.get("CRAB_ReqName")
                     or job.get("WMAgent_RequestName")
+                    or condora_req
                     or ("{}#{}".format(schedd_name, dagman_id)
                         if dagman_id else None)
                     or job.get("SubmitFile")
                     or "unknown")
+            condora_round = job.get("CONDORA_Round")
+            if condora_req and condora_round is not None:
+                task = "{}/{}".format(task, condora_round)
             gv_key = "{}/{}".format(owner, task)
             bucket = _ensure(self.exit_codes, "globalview", gv_key)
             bucket.setdefault(minute, {})

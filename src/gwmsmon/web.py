@@ -205,6 +205,13 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
 
         updated = summary.get("updated", 0)
 
+        priorities = summary.get("priorities", {}) if view == "prodview" else {}
+
+        fairshare = {}
+        if view == "globalview":
+            fairshare = _load_json(basedir, "fairshare.json").get(
+                "categories", {})
+
         return render_template(
             "overview.html",
             view=view,
@@ -214,6 +221,8 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             sites=sorted_sites,
             exit_codes=exit_codes,
             schedds=summary.get("schedds", {}),
+            priorities=priorities,
+            fairshare=fairshare,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,
@@ -240,10 +249,14 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
 
+        prio_info = subtasks.get("_priority", {})
+
         # Compute request-level totals from subtasks
         req_totals = {"Running": 0, "MatchingIdle": 0,
                       "CpusInUse": 0, "CpusPending": 0}
-        for st_data in subtasks.values():
+        for st_name, st_data in subtasks.items():
+            if st_name.startswith("_"):
+                continue
             for k in req_totals:
                 req_totals[k] += st_data.get(k, 0)
 
@@ -261,6 +274,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             name=name,
             subtasks=subtasks,
             req_totals=req_totals,
+            prio_info=prio_info,
             exit_codes=exit_codes,
             sites=sorted_sites,
             updated=updated,
@@ -429,7 +443,8 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         kind = parts[0]
         if kind == "summary":
             filename = "_summary.json"
-        elif kind in ("request", "site", "schedd") and len(parts) == 2:
+        elif kind in ("request", "site", "schedd", "fairshare",
+                      "priority") and len(parts) == 2:
             safe = parts[1].replace("/", "_")
             filename = "{}_{}.json".format(kind, safe)
         else:
@@ -494,6 +509,12 @@ def _poolview_overview(cfg):
         key=lambda x: -x[1].get("Running", 0),
     )
 
+    fairshare = summary.get("fairshare", {})
+    sorted_fairshare = sorted(
+        fairshare.items(),
+        key=lambda x: -x[1].get("CpusInUse", 0),
+    )
+
     return render_template(
         "poolview.html",
         view="poolview",
@@ -501,6 +522,7 @@ def _poolview_overview(cfg):
         totals=summary.get("totals", {}),
         schedds=sorted_schedds,
         user_summary=sorted_users,
+        fairshare=sorted_fairshare,
         updated=updated,
         freshness=_freshness(updated),
         updated_ts=updated,

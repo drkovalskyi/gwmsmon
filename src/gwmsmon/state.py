@@ -120,6 +120,9 @@ class State:
                                                  status, cpus, user,
                                                  schedd_name)
 
+        # Copy fairshare from globalview → poolview (single source of truth)
+        snap["poolview"]["fairshare"] = snap["globalview"]["fairshare"]
+
         # --- Summary ads → globalview pool-wide, poolview ---
         self._process_summary_ads(snap, summary_ads)
 
@@ -166,6 +169,7 @@ class State:
                 "schedds": {},
                 "negotiator": {},
                 "user_summary": {},
+                "fairshare": {},
                 "totals": {},
             },
             "factoryview": {
@@ -232,6 +236,17 @@ class State:
         for k, v in _zero_counts().items():
             p.setdefault(k, 0)
         _add_counts(p, status, cpus)
+
+        # per-request priority tracking
+        req_prio = _ensure(view["workflows"], request, "_priority")
+        req_prio.setdefault("_jobs", {})
+        req_prio["_jobs"].setdefault(prio, 0)
+        req_prio["_jobs"][prio] += 1
+        req_prio.setdefault("_sum", 0)
+        req_prio.setdefault("_count", 0)
+        job_prio_val = job.get("JobPrio") or 0
+        req_prio["_sum"] += job_prio_val
+        req_prio["_count"] += 1
 
     def _aggregate_analysisview(self, view, job, status, cpus, user,
                                 schedd_name):
@@ -349,6 +364,15 @@ class State:
             sd["MatchingIdle"] += 1
         elif status == 5:
             sd["Held"] += 1
+
+        # Accounting group category aggregation
+        acct_group = job.get("AccountingGroup", "")
+        category = acct_group.split(".")[0] if acct_group else "other"
+        if status in (1, 2):
+            fs = _ensure(view["fairshare"], category)
+            for k in _zero_counts():
+                fs.setdefault(k, 0)
+            _add_counts(fs, status, cpus)
 
         # UserSummary from scheduler-universe jobs (JobUniverse == 7)
         if job.get("JobUniverse") == 7:
@@ -884,6 +908,8 @@ class State:
             self._ts_append("prodview", f"request:{req}", req_totals, now)
         for site, counts in snap["prodview"]["sites"].items():
             self._ts_append("prodview", f"site:{site}", counts, now)
+        for block, counts in snap["prodview"]["priorities"].items():
+            self._ts_append("prodview", f"priority:{block}", counts, now)
 
         # analysisview
         self._ts_append("analysisview", "_summary",
@@ -908,10 +934,9 @@ class State:
         for site, counts in snap["globalview"]["sites"].items():
             self._ts_append("globalview", f"site:{site}", counts, now)
 
-        # globalview fairshare (placeholder — needs summary ad data)
-        fs = snap["globalview"].get("fairshare", {})
-        if fs:
-            self._ts_append("globalview", "_fairshare", fs, now)
+        # globalview fairshare
+        for cat, counts in snap["globalview"].get("fairshare", {}).items():
+            self._ts_append("globalview", f"fairshare:{cat}", counts, now)
 
         # poolview — totals computed from schedds (not yet in snapshot)
         pv_running = 0
@@ -933,6 +958,8 @@ class State:
                 "TotalIdleJobs": sd.get("TotalIdleJobs", 0),
                 "TotalHeldJobs": sd.get("TotalHeldJobs", 0),
             }, now)
+        for cat, counts in snap["poolview"].get("fairshare", {}).items():
+            self._ts_append("poolview", f"fairshare:{cat}", counts, now)
 
         # factoryview
         fv_totals = snap["factoryview"].get("totals", {})
@@ -1015,11 +1042,21 @@ class State:
 
             view_data = snap[view]
 
-            _atomic_json(os.path.join(basedir, "summary.json"), {
+            summary_out = {
                 "updated": self.updated,
                 "schedds": view_data.get("schedds", {}),
                 "totals": view_data.get("totals", {}),
-            })
+            }
+            if view == "prodview":
+                summary_out["priorities"] = view_data.get("priorities", {})
+            _atomic_json(os.path.join(basedir, "summary.json"), summary_out)
+
+            # Fairshare JSON for globalview
+            if view == "globalview":
+                _atomic_json(os.path.join(basedir, "fairshare.json"), {
+                    "updated": self.updated,
+                    "categories": view_data.get("fairshare", {}),
+                })
 
             if view == "analysisview":
                 wf_out = {
@@ -1031,11 +1068,31 @@ class State:
                     req: {
                         st: data.get("Summary", {})
                         for st, data in subtasks.items()
+                        if not st.startswith("_")
                     }
                     for req, subtasks in view_data.get("workflows",
                                                        view_data.get("users",
                                                                      {})).items()
                 }
+
+            # Enrich with per-request priority data
+            if view == "prodview":
+                for req, subtasks_raw in view_data.get("workflows",
+                                                       {}).items():
+                    prio_data = subtasks_raw.get("_priority", {})
+                    if prio_data and req in wf_out:
+                        jobs_by_block = prio_data.get("_jobs", {})
+                        total_jobs = prio_data.get("_count", 0)
+                        avg_prio = (prio_data["_sum"] // total_jobs
+                                    if total_jobs else 0)
+                        dominant = (max(jobs_by_block,
+                                        key=jobs_by_block.get)
+                                    if jobs_by_block else "B7")
+                        wf_out[req]["_priority"] = {
+                            "block": dominant,
+                            "prio": avg_prio,
+                            "blocks": jobs_by_block,
+                        }
 
             _atomic_json(os.path.join(basedir, "totals.json"), {
                 "updated": self.updated,
@@ -1058,7 +1115,7 @@ class State:
                 # Aggregate site counts across subtasks
                 req_sites = {}
                 for st_name, sites_data in subtasks.items():
-                    if st_name == "Summary":
+                    if st_name == "Summary" or st_name.startswith("_"):
                         continue
                     if not isinstance(sites_data, dict):
                         continue
@@ -1105,6 +1162,7 @@ class State:
                 "schedds": pv.get("schedds", {}),
                 "negotiator": gv.get("negotiator", {}),
                 "user_summary": gv.get("user_summary", {}),
+                "fairshare": pv.get("fairshare", {}),
                 "totals": pv_totals,
             })
 

@@ -20,6 +20,16 @@
     <div class="stat-value">{{ req_totals.CpusPending|fmt }}</div>
     <div class="stat-label">CPUs Pending</div>
   </div>
+  {% if prio_info %}
+  <div class="stat">
+    <div class="stat-value">{{ prio_info.get('block', '?') }}</div>
+    <div class="stat-label">Priority Block</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ prio_info.get('prio', 0)|fmt }}</div>
+    <div class="stat-label">Avg JobPrio</div>
+  </div>
+  {% endif %}
 </div>
 
 <div class="graphs-row">
@@ -27,6 +37,23 @@
   <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="daily"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="weekly"></div>
 </div>
+
+{% if prio_info and prio_info.get('blocks', {})|length > 1 %}
+<div class="section">
+  <h2>Priority Distribution</h2>
+  <table class="data-table compact">
+    <thead><tr><th>Block</th><th data-sort="num">Jobs</th></tr></thead>
+    <tbody>
+    {% for block in ['B0','B1','B2','B3','B4','B5','B6','B7'] %}
+    {% set count = prio_info.blocks.get(block, 0) %}
+    {% if count %}
+    <tr><td>{{ block }}</td><td>{{ count|fmt }}</td></tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 {% if exit_codes and exit_codes.get('total', 0) > 0 %}
 <details class="section" open>
@@ -108,7 +135,7 @@
       </tr>
     </thead>
     <tbody>
-    {% for st_name, st_data in subtasks.items() %}
+    {% for st_name, st_data in subtasks.items() if not st_name.startswith('_') %}
     <tr>
       <td>{{ st_name }}</td>
       <td>{{ st_data.get('Running', 0)|fmt }}</td>

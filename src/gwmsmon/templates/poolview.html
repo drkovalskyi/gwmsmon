@@ -92,4 +92,32 @@
   </div>
 </div>
 {% endif %}
+
+{% if fairshare %}
+<div class="section">
+  <h2>Accounting Groups ({{ fairshare|length }})</h2>
+  <div class="table-scroll">
+  <table class="data-table sortable" id="acctgrp-table" data-sort-default="3:desc">
+    <thead><tr>
+      <th>Category</th>
+      <th data-sort="num">Running</th>
+      <th data-sort="num">Idle</th>
+      <th data-sort="num">CPUs Use</th>
+      <th data-sort="num">CPUs Pend</th>
+    </tr></thead>
+    <tbody>
+    {% for cat, data in fairshare %}
+    <tr>
+      <td>{{ cat }}</td>
+      <td>{{ data.get('Running', 0)|fmt }}</td>
+      <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>
+      <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
+      <td>{{ data.get('CpusPending', 0)|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

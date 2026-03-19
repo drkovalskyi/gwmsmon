@@ -13,6 +13,21 @@ import time
 
 log = logging.getLogger(__name__)
 
+# Map negotiator Name prefix → site tier label (mirrors query.py)
+_NEGOTIATOR_TIERS = {
+    "vocms0824": "CERN",
+    "NEGOTIATORT1": "T1",
+    "NEGOTIATORUS": "US_T2",
+}
+
+
+def _negotiator_tier(neg_name):
+    """Map a NegotiatorName to a site tier label."""
+    for prefix, tier in _NEGOTIATOR_TIERS.items():
+        if neg_name.startswith(prefix):
+            return tier
+    return "nonUS_T2_T3"
+
 # Retention: full resolution for 3.5 days, hourly for 365 days
 FULL_RES_SECONDS = int(3.5 * 86400)  # 302400
 HOURLY_RES_SECONDS = 30 * 86400      # 2592000
@@ -84,7 +99,7 @@ class State:
         self.exit_code_detail = {}   # {view: {code: {workflow: count, site: count, ...}}}
         self.history_watermarks = {} # {schedd_name: timestamp}
 
-    def update(self, jobs, summary_ads, factory_data):
+    def update(self, jobs, summary_ads, factory_data, accounting_ads=None):
         """Rebuild snapshot from fresh data.
 
         One pass through all jobs, routing each to the relevant views
@@ -129,6 +144,9 @@ class State:
         # --- Factory data → factoryview, globalview ---
         self._process_factory_data(snap, factory_data)
 
+        # --- Accounting ads → globalview ---
+        self._process_accounting_ads(snap, accounting_ads or [])
+
         self.snapshot = snap
         self.updated = time.time()
 
@@ -164,6 +182,7 @@ class State:
                 "fairshare": {},
                 "user_summary": {},
                 "negotiator": {},
+                "accounting": {},
             },
             "poolview": {
                 "schedds": {},
@@ -193,6 +212,15 @@ class State:
         for k, v in _zero_counts().items():
             st.setdefault(k, 0)
         _add_counts(st, status, cpus)
+
+        # per-subtask priority
+        st_prio = _ensure(view["workflows"], request, subtask, "_priority")
+        st_prio.setdefault(prio, 0)
+        st_prio[prio] += 1
+        st_prio.setdefault("_sum", 0)
+        st_prio.setdefault("_count", 0)
+        st_prio["_sum"] += job.get("JobPrio") or 0
+        st_prio["_count"] += 1
 
         # workflows[request][subtask][site] (if running at a site)
         if site and status == 2:
@@ -374,6 +402,18 @@ class State:
                 fs.setdefault(k, 0)
             _add_counts(fs, status, cpus)
 
+        # per-user accounting groups (count jobs per category)
+        user_acct = _ensure(view["users"], owner, "_acct")
+        user_acct.setdefault(category, 0)
+        user_acct[category] += 1
+
+        # per-user per-group resource counts (idle + running)
+        if status in (1, 2):
+            gs = _ensure(view["users"], owner, "_group_stats", category)
+            for k in _zero_counts():
+                gs.setdefault(k, 0)
+            _add_counts(gs, status, cpus)
+
         # UserSummary from scheduler-universe jobs (JobUniverse == 7)
         if job.get("JobUniverse") == 7:
             us = _ensure(view["user_summary"], owner)
@@ -488,6 +528,46 @@ class State:
             "Idle": total_idle,
             "Held": total_held,
             "Sites": len(site_summaries),
+        }
+
+    def _process_accounting_ads(self, snap, ads):
+        """Process negotiator Accounting ads into globalview."""
+        if not ads:
+            return
+
+        groups = {}   # {tier: {group_name: {ConfigQuota, ...}}}
+        users = {}    # {tier: [user_dicts]}
+
+        for ad in ads:
+            neg_name = ad.get("NegotiatorName", "")
+            tier = _negotiator_tier(neg_name)
+            name = ad.get("Name", "")
+
+            if ad.get("IsAccountingGroup"):
+                if name == "<none>":
+                    continue
+                groups.setdefault(tier, {})[name] = {
+                    "ConfigQuota": ad.get("ConfigQuota", 0),
+                    "EffectiveQuota": ad.get("EffectiveQuota", 0),
+                    "SurplusPolicy": ad.get("SurplusPolicy", ""),
+                }
+            else:
+                acct_group = ad.get("AccountingGroup", "")
+                users.setdefault(tier, []).append({
+                    "name": name,
+                    "group": acct_group,
+                    "PriorityFactor": ad.get("PriorityFactor", 0),
+                    "Priority": ad.get("Priority", 0),
+                    "ResourcesUsed": ad.get("ResourcesUsed", 0),
+                    "WeightedResourcesUsed": ad.get(
+                        "WeightedResourcesUsed", 0),
+                    "AccumulatedUsage": ad.get("AccumulatedUsage", 0),
+                    "SubmitterLimit": ad.get("SubmitterLimit", 0),
+                })
+
+        snap["globalview"]["accounting"] = {
+            "groups": groups,
+            "users": users,
         }
 
     # --- Step 9: Exit code collection ---
@@ -1057,6 +1137,13 @@ class State:
                     "updated": self.updated,
                     "categories": view_data.get("fairshare", {}),
                 })
+                acct = view_data.get("accounting", {})
+                if acct:
+                    _atomic_json(os.path.join(basedir, "accounting.json"), {
+                        "updated": self.updated,
+                        "groups": acct.get("groups", {}),
+                        "users": acct.get("users", {}),
+                    })
 
             if view == "analysisview":
                 wf_out = {
@@ -1064,16 +1151,36 @@ class State:
                     for req, subtasks in view_data.get("workflows", {}).items()
                 }
             else:
-                wf_out = {
-                    req: {
-                        st: data.get("Summary", {})
-                        for st, data in subtasks.items()
-                        if not st.startswith("_")
-                    }
-                    for req, subtasks in view_data.get("workflows",
-                                                       view_data.get("users",
-                                                                     {})).items()
-                }
+                wf_out = {}
+                for req, subtasks in view_data.get(
+                        "workflows",
+                        view_data.get("users", {})).items():
+                    req_out = {}
+                    for st, data in subtasks.items():
+                        if st.startswith("_"):
+                            continue
+                        st_out = dict(data.get("Summary", {}))
+                        st_prio = data.get("_priority", {})
+                        if st_prio:
+                            st_count = st_prio.get("_count", 0)
+                            st_out["_prio"] = (st_prio["_sum"] // st_count
+                                               if st_count else 0)
+                        req_out[st] = st_out
+                    wf_out[req] = req_out
+
+            # Enrich with per-user accounting groups (globalview)
+            if view == "globalview":
+                for user, tasks in view_data.get("users", {}).items():
+                    if user not in wf_out:
+                        continue
+                    user_acct = tasks.get("_acct", {})
+                    if user_acct:
+                        wf_out[user]["_groups"] = sorted(
+                            user_acct.keys(),
+                            key=user_acct.get, reverse=True)
+                    group_stats = tasks.get("_group_stats", {})
+                    if group_stats:
+                        wf_out[user]["_group_stats"] = dict(group_stats)
 
             # Enrich with per-request priority data
             if view == "prodview":

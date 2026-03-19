@@ -5,9 +5,10 @@
 #   --restart   restart collector and web after sync (default: sync only)
 #
 # What it does:
-#   1. Syncs src/gwmsmon/ to the server with correct permissions
+#   1. Syncs src/gwmsmon/ and systemd/ to the server with correct permissions
 #   2. Clears __pycache__ so new code is picked up
-#   3. Optionally stops old processes, starts new ones, verifies health
+#   3. Optionally stops services, kills orphans, installs service files,
+#      starts services via systemd, verifies health
 
 set -euo pipefail
 
@@ -15,6 +16,7 @@ HOST="gwmsmon@vocms860.cern.ch"
 REMOTE_BASE="/opt/gwmsmon2"
 REMOTE_SRC="$REMOTE_BASE/src/gwmsmon"
 LOCAL_SRC="$(dirname "$0")/src/gwmsmon"
+LOCAL_SYSTEMD="$(dirname "$0")/systemd"
 RESTART=false
 
 for arg in "$@"; do
@@ -30,9 +32,13 @@ rsync -rlpt --delete --chmod=Do+rx,Fo+r \
   --exclude='__pycache__' \
   "$LOCAL_SRC/" "$HOST:$REMOTE_SRC/"
 
+echo "==> Syncing systemd service files"
+rsync -rlpt --chmod=Fo+r \
+  "$LOCAL_SYSTEMD/" "$HOST:$REMOTE_BASE/systemd/"
+
 # --- 2. Clear bytecode cache ---
 echo "==> Clearing __pycache__"
-ssh "$HOST" "rm -rf $REMOTE_SRC/__pycache__"
+ssh "$HOST" "find $REMOTE_SRC -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true"
 
 echo "==> Sync complete"
 
@@ -41,38 +47,22 @@ if [ "$RESTART" = false ]; then
   exit 0
 fi
 
-# --- 3. Stop existing processes ---
-echo "==> Stopping existing processes"
-
-# Collector — send SIGTERM (graceful), wait, then SIGKILL if needed
+# --- 3. Stop services and kill orphans ---
+echo "==> Stopping services"
 ssh "$HOST" bash <<'STOP'
-pids=$(pgrep -u gwmsmon -f 'gwmsmon\.collector' || true)
-if [ -n "$pids" ]; then
-  echo "  Killing collector PIDs: $pids"
-  kill $pids 2>/dev/null || true
-  for i in $(seq 1 10); do
-    sleep 1
-    remaining=$(pgrep -u gwmsmon -f 'gwmsmon\.collector' || true)
-    [ -z "$remaining" ] && break
-    if [ "$i" -eq 10 ]; then
-      echo "  Force killing: $remaining"
-      kill -9 $remaining 2>/dev/null || true
-      sleep 1
-    fi
-  done
+sudo systemctl stop gwmsmon-collect gwmsmon-web 2>/dev/null || true
+
+# Kill ANY orphan gwmsmon processes (from old setsid deploys)
+orphans=$(pgrep -u gwmsmon -f 'gwmsmon\.(collector|web)' || true)
+if [ -n "$orphans" ]; then
+  echo "  Killing orphan PIDs: $orphans"
+  kill -9 $orphans 2>/dev/null || true
+  sleep 1
 fi
 
-pids=$(pgrep -u gwmsmon -f 'gwmsmon\.web' || true)
-if [ -n "$pids" ]; then
-  echo "  Killing web PIDs: $pids"
-  kill $pids 2>/dev/null || true
-  sleep 2
-  remaining=$(pgrep -u gwmsmon -f 'gwmsmon\.web' || true)
-  if [ -n "$remaining" ]; then
-    kill -9 $remaining 2>/dev/null || true
-    sleep 1
-  fi
-fi
+# Release port 5000 if still held
+sudo fuser -k 5000/tcp 2>/dev/null || true
+sleep 1
 
 # Verify clean
 remaining=$(pgrep -u gwmsmon -f 'gwmsmon\.(collector|web)' || true)
@@ -83,45 +73,59 @@ fi
 echo "  All processes stopped"
 STOP
 
-# --- 4. Start new processes ---
-echo "==> Starting collector"
-ssh -f "$HOST" "cd $REMOTE_BASE && PYTHONPATH=src setsid /usr/bin/python3 -m gwmsmon.collector --verbose > /tmp/collector.log 2>&1 < /dev/null"
-sleep 2
+# --- 4. Install service files if changed ---
+echo "==> Installing service files"
+ssh "$HOST" bash <<INSTALL
+RELOAD=false
+for svc in gwmsmon-collect gwmsmon-web; do
+  if ! diff -q "$REMOTE_BASE/systemd/\$svc.service" "/etc/systemd/system/\$svc.service" >/dev/null 2>&1; then
+    echo "  Updating \$svc.service"
+    sudo cp "$REMOTE_BASE/systemd/\$svc.service" "/etc/systemd/system/\$svc.service"
+    RELOAD=true
+  fi
+done
+if [ "\$RELOAD" = true ]; then
+  echo "  Reloading systemd daemon"
+  sudo systemctl daemon-reload
+fi
+INSTALL
 
-echo "==> Starting web"
-ssh -f "$HOST" "cd $REMOTE_BASE && PYTHONPATH=src setsid /usr/bin/python3 -m gwmsmon.web --host 127.0.0.1 --port 5000 > /tmp/web.log 2>&1 < /dev/null"
-sleep 2
+# --- 5. Start services ---
+echo "==> Starting services"
+ssh "$HOST" bash <<'START'
+sudo systemctl start gwmsmon-collect
+sudo systemctl start gwmsmon-web
+START
 
-# --- 5. Verify ---
-echo "==> Verifying processes"
-procs=$(ssh "$HOST" "pgrep -u gwmsmon -af 'gwmsmon\.(collector|web)' | grep -v bash || true")
-collector_ok=false
-web_ok=false
-while IFS= read -r line; do
-  [[ "$line" == *gwmsmon.collector* ]] && collector_ok=true
-  [[ "$line" == *gwmsmon.web* ]] && web_ok=true
-  echo "  $line"
-done <<< "$procs"
-
-if [ "$collector_ok" = false ]; then
+# --- 6. Verify ---
+echo "==> Verifying services"
+ssh "$HOST" bash <<'VERIFY'
+ok=true
+if sudo systemctl is-active --quiet gwmsmon-collect; then
+  echo "  collector: active"
+else
   echo "  ERROR: collector not running"
-  ssh "$HOST" "tail -20 /tmp/collector.log" 2>/dev/null || true
-  exit 1
+  sudo journalctl -u gwmsmon-collect -n 20 --no-pager
+  ok=false
 fi
-if [ "$web_ok" = false ]; then
+if sudo systemctl is-active --quiet gwmsmon-web; then
+  echo "  web: active"
+else
   echo "  ERROR: web not running"
-  ssh "$HOST" "tail -20 /tmp/web.log" 2>/dev/null || true
-  exit 1
+  sudo journalctl -u gwmsmon-web -n 20 --no-pager
+  ok=false
 fi
+[ "$ok" = true ] || exit 1
+VERIFY
 
-# --- 6. Health check web ---
+# --- 7. Health check web ---
 echo "==> Health check"
+sleep 2
 http_code=$(ssh "$HOST" "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/prodview/")
 if [ "$http_code" = "200" ]; then
   echo "  Web OK (HTTP $http_code)"
 else
   echo "  WARNING: web returned HTTP $http_code"
-  ssh "$HOST" "tail -10 /tmp/web.log" 2>/dev/null || true
 fi
 
 echo "==> Deploy complete"

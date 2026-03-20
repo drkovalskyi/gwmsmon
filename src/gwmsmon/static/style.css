@@ -145,6 +145,32 @@ h2 {
 
 .section { margin-bottom: 24px; }
 
+/* Tabs */
+.tab-bar {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid var(--border-mid);
+}
+.tab-btn {
+  padding: 8px 16px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active {
+  color: var(--text-heading);
+  border-bottom-color: var(--text-heading);
+}
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
 details.section > summary {
   cursor: pointer;
   list-style: none;
@@ -201,8 +227,8 @@ details.section:not([open]) > summary h2::before {
 }
 
 .chart {
-  width: 280px;
-  min-height: 260px;
+  width: 373px;
+  height: 300px;
   background: var(--bg-card);
   border-radius: 4px;
   box-shadow: 0 1px 3px var(--shadow);

@@ -24,6 +24,33 @@ function toggleTheme() {
   });
 })();
 
+// Tab switching with URL hash support
+(function() {
+  function activateTab(tabId) {
+    var btn = document.querySelector('.tab-btn[data-tab="' + tabId + '"]');
+    if (!btn) return false;
+    var parent = btn.closest('main') || document;
+    parent.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+    parent.querySelectorAll('.tab-pane').forEach(function(p) { p.classList.remove('active'); });
+    btn.classList.add('active');
+    var pane = document.getElementById(tabId);
+    if (pane) pane.classList.add('active');
+    return true;
+  }
+
+  document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      activateTab(btn.dataset.tab);
+      history.replaceState(null, '', '#' + btn.dataset.tab);
+    });
+  });
+
+  // Activate tab from URL hash on load
+  if (location.hash) {
+    activateTab(location.hash.slice(1));
+  }
+})();
+
 // Freshness indicator — updates every second
 (function() {
   var el = document.querySelector('.freshness');
@@ -110,11 +137,11 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
   var INTERVALS = { hourly: 3*3600, daily: 24*3600, weekly: 7*24*3600 };
   var isDark = document.documentElement.dataset.theme === 'dark';
   var CPUS_COLOR = isDark ? '#64b5f6' : '#0055D4';
-  var RATIO_COLOR = isDark ? '#aaa' : '#222222';
+  var RATIO_COLOR = isDark ? '#FF9830' : '#222222';
   var AXIS_STROKE = isDark ? '#999' : '#888';
   var AXIS_LABEL_STROKE = isDark ? '#bbb' : '#444';
   var YLIM_PAD = 0.20;
-  var CHART_W = 280;
+  var CHART_W = 373;
   var CHART_H = 300;
   var LABEL_H = 18;
   var GAP_H = 8;
@@ -408,7 +435,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     TotalIdleJobs: IDLE_COLOR,
     TotalHeldJobs: HELD_COLOR,
   };
-  var SIMPLE_CHART_H = 240;
+  var SIMPLE_CHART_H = 282;
 
   function renderSimpleChart(el, series, sharedSimpleYMax) {
     var interval = INTERVALS[el.dataset.interval] || INTERVALS.hourly;
@@ -559,6 +586,152 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     new uPlot(opts, [timestamps, totalArr, failArr], el);
   }
 
+  // Priority block colors — exact old service palette
+  // Visual order bottom→top: B0(red), B1(orange), ..., B7(black)
+  var BLOCK_COLORS = [
+    '#ff0000', '#ff7f00', '#ffff00', '#00ff00',
+    '#0000ff', '#6600ff', '#8800ff', isDark ? '#90A4AE' : '#000000'
+  ];
+  var BLOCKS = ['B0','B1','B2','B3','B4','B5','B6','B7'];
+
+  function renderStackedChart(el, blockData, metric, label) {
+    var interval = INTERVALS[el.dataset.interval] || INTERVALS.hourly;
+    var loader = el.querySelector('.chart-loading');
+    if (loader) loader.remove();
+
+    var titleEl = document.createElement('div');
+    titleEl.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:' + AXIS_LABEL_STROKE + ';padding:2px 0 0';
+    titleEl.textContent = label + ' \u2014 ' + ({hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days'}[el.dataset.interval] || '');
+    el.appendChild(titleEl);
+
+    var xMax = Math.floor(Date.now() / 1000);
+    var xMin = xMax - interval;
+    var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
+
+    // Collect all timestamps across all blocks
+    var tSet = {};
+    BLOCKS.forEach(function(b) {
+      var s = (blockData[b] || {})[metric] || {t:[],v:[]};
+      for (var i = 0; i < s.t.length; i++) {
+        if (s.t[i] >= xMin) tSet[s.t[i]] = true;
+      }
+    });
+    var timestamps = Object.keys(tSet).map(Number).sort(function(a,b){return a-b;});
+    if (!timestamps.length) return;
+
+    // Build per-block raw value arrays aligned to timestamps
+    // blockArrays[0]=B0, blockArrays[7]=B7
+    var blockArrays = BLOCKS.map(function(b) {
+      var s = (blockData[b] || {})[metric] || {t:[],v:[]};
+      var m = {};
+      for (var i = 0; i < s.t.length; i++) m[s.t[i]] = s.v[i];
+      var arr = new Float64Array(timestamps.length);
+      for (var i = 0; i < timestamps.length; i++) {
+        arr[i] = m[timestamps[i]] || 0;
+      }
+      return arr;
+    });
+
+    // Cumulate from B0 upward: cum[0]=B0, cum[1]=B0+B1, ..., cum[7]=total
+    var cum = [];
+    for (var i = 0; i < BLOCKS.length; i++) {
+      var prev = i > 0 ? cum[i - 1] : null;
+      var arr = new Float64Array(timestamps.length);
+      for (var j = 0; j < timestamps.length; j++) {
+        arr[j] = blockArrays[i][j] + (prev ? prev[j] : 0);
+      }
+      cum.push(arr);
+    }
+
+    // uPlot data: series 1 = outermost (total), series 8 = innermost (B0)
+    // data[1]=cum[7](total), data[2]=cum[6], ..., data[8]=cum[0](B0)
+    var tsArr = new Float64Array(timestamps);
+    var data = [tsArr];
+    for (var i = BLOCKS.length - 1; i >= 0; i--) {
+      data.push(cum[i]);
+    }
+
+    var yMax = alignedCpusMax(arrMax(cum[BLOCKS.length - 1]));
+
+    // Series drawn outermost first (data[1]=total) to innermost (data[8]=B0).
+    // Each fills to zero; later series paint over earlier ones, creating stack.
+    // data[si] contribution = block BLOCKS.length - si
+    var uSeries = [{}];
+    for (var si = 1; si <= BLOCKS.length; si++) {
+      var bi = BLOCKS.length - si;
+      uSeries.push({
+        scale: 'y',
+        stroke: BLOCK_COLORS[bi],
+        fill: BLOCK_COLORS[bi],
+        width: 0,
+        label: BLOCKS[bi],
+      });
+    }
+
+    // Tooltip: show per-block raw values (not cumulative)
+    function stackedTooltipPlugin() {
+      var tip;
+      return {
+        hooks: {
+          init: function(u) {
+            tip = document.createElement('div');
+            tip.className = 'chart-tooltip';
+            u.over.appendChild(tip);
+          },
+          setCursor: function(u) {
+            var idx = u.cursor.idx;
+            if (idx == null) { tip.style.display = 'none'; return; }
+            var ts = u.data[0][idx];
+            var d = new Date(ts * 1000);
+            var time = ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+            var html = '<b>' + d.toLocaleDateString() + ' ' + time + '</b>';
+            // Iterate blocks bottom→top (B0 first)
+            for (var bi = 0; bi < BLOCKS.length; bi++) {
+              var val = blockArrays[bi][idx];
+              if (val > 0) {
+                html += '<br><span style="color:' + BLOCK_COLORS[bi] + '">\u25CF</span> ' + BLOCKS[bi] + ': ' + fmtCount(val);
+              }
+            }
+            tip.innerHTML = html;
+            tip.style.display = 'block';
+            var left = u.cursor.left + 12;
+            if (left + tip.offsetWidth > u.over.offsetWidth)
+              left = u.cursor.left - tip.offsetWidth - 12;
+            tip.style.left = left + 'px';
+            tip.style.top = '4px';
+          },
+        }
+      };
+    }
+
+    var opts = {
+      width: CHART_W,
+      height: SIMPLE_CHART_H,
+      cursor: { show: true },
+      legend: { show: false },
+      padding: [4, 8, 2, LEFT_PAD],
+      plugins: [stackedTooltipPlugin()],
+      scales: {
+        x: { min: xMin, max: xMax },
+        y: { min: 0, max: yMax, auto: false },
+      },
+      axes: [
+        { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE },
+        {
+          scale: 'y',
+          size: 50,
+          font: '10px sans-serif',
+          stroke: AXIS_LABEL_STROKE,
+          splits: gridSplits,
+          values: function(self, ticks) { return ticks.map(fmtCount); },
+        },
+      ],
+      series: uSeries,
+    };
+
+    new uPlot(opts, data, el);
+  }
+
   function renderCharts() {
     var charts = document.querySelectorAll('.chart');
     if (!charts.length) return;
@@ -567,12 +740,15 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
     var simpleCharts = [];
     var dualCharts = [];
     var histogramCharts = [];
+    var stackedCharts = [];
     charts.forEach(function(el) {
       el.innerHTML = '<div class="chart-loading">Loading...</div>';
       if (el.dataset.chartType === 'simple') {
         simpleCharts.push(el);
       } else if (el.dataset.chartType === 'histogram') {
         histogramCharts.push(el);
+      } else if (el.dataset.chartType === 'stacked') {
+        stackedCharts.push(el);
       } else {
         dualCharts.push(el);
       }
@@ -661,6 +837,8 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
                   if (rawData[s]) renderHistogramChart(el, rawData[s]);
                 } else if (el.dataset.chartType === 'simple') {
                   if (allData[s]) renderSimpleChart(el, allData[s], sharedSimpleYMax);
+                } else if (el.dataset.chartType === 'stacked') {
+                  if (rawData[s]) renderStackedChart(el, rawData[s], el.dataset.stackedMetric, el.dataset.stackedLabel || '');
                 } else {
                   if (allData[s]) renderChartWithSharedScale(el, allData[s], sharedRatioYMax, sharedCpusYMax);
                 }

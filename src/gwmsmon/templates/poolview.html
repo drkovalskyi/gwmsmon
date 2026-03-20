@@ -28,8 +28,8 @@
   <div class="chart" data-src="/poolview/tsdata/summary" data-interval="weekly" data-chart-type="simple"></div>
 </div>
 
-<div class="section">
-  <h2>Schedds ({{ schedds|length }})</h2>
+<details class="section" open data-section="poolview_schedds">
+  <summary><h2>Schedds ({{ schedds|length }})</h2></summary>
   <input type="text" class="table-filter" placeholder="Filter..." data-table="schedd-table">
   <div class="table-scroll">
   <table class="data-table sortable" id="schedd-table" data-sort-default="2:desc">
@@ -47,7 +47,7 @@
     <tbody>
     {% for name, data in schedds %}
     <tr>
-      <td>{{ name }}</td>
+      <td><a href="/poolview/schedd/{{ name }}">{{ name }}</a></td>
       <td>{{ data.get('CMSGWMS_Type', '') }}</td>
       <td>{{ data.get('TotalRunningJobs', 0)|fmt }}</td>
       <td>{{ data.get('TotalIdleJobs', 0)|fmt }}</td>
@@ -60,11 +60,11 @@
     </tbody>
   </table>
   </div>
-</div>
+</details>
 
 {% if user_summary %}
-<div class="section">
-  <h2>User Summary ({{ user_summary|length }})</h2>
+<details class="section" open data-section="poolview_users">
+  <summary><h2>User Summary ({{ user_summary|length }})</h2></summary>
   <input type="text" class="table-filter" placeholder="Filter..." data-table="user-table">
   <div class="table-scroll">
   <table class="data-table sortable" id="user-table" data-sort-default="1:desc">
@@ -90,12 +90,12 @@
     </tbody>
   </table>
   </div>
-</div>
+</details>
 {% endif %}
 
 {% if fairshare %}
-<div class="section">
-  <h2>Accounting Groups ({{ fairshare|length }})</h2>
+<details class="section" open data-section="poolview_fairshare">
+  <summary><h2>Accounting Groups ({{ fairshare|length }})</h2></summary>
   <div class="table-scroll">
   <table class="data-table sortable" id="acctgrp-table" data-sort-default="3:desc">
     <thead><tr>
@@ -118,6 +118,6 @@
     </tbody>
   </table>
   </div>
-</div>
+</details>
 {% endif %}
 {% endblock %}

@@ -48,7 +48,7 @@
 {% set wins = exit_codes.get('windows', {}) if exit_codes else {} %}
 {% set any_completions = wins.get('1h', {}).get('total', 0) > 0 or wins.get('24h', {}).get('total', 0) > 0 or wins.get('7d', {}).get('total', 0) > 0 %}
 {% if any_completions %}
-<details class="section" open data-view="{{ view }}">
+<details class="section" open data-section="{{ view }}_completion">
   <summary><h2>Completion Summary</h2></summary>
   <table class="data-table compact">
     <thead><tr>
@@ -96,17 +96,19 @@
 </details>
 {% endif %}
 
-<div class="section">
-  <h2>{{ view_cfg.entity_label }}s ({{ workflows|length }})</h2>
+<details class="section" open data-section="{{ view }}_workflows">
+  <summary><h2>{{ view_cfg.entity_label }}s ({{ workflows|length }})</h2></summary>
   <input type="text" class="table-filter" placeholder="Filter..." data-table="wf-table">
   <div class="table-scroll">
-  <table class="data-table sortable" id="wf-table">
+  <table class="data-table sortable" id="wf-table" data-sort-default="{% if view == 'prodview' %}5{% elif view == 'globalview' %}4{% else %}3{% endif %}:desc">
     <thead>
       <tr>
         <th>{{ view_cfg.entity_label }}</th>
         {% if view == 'prodview' %}
         <th data-sort="num">Prio</th>
         <th>Block</th>
+        {% elif view == 'globalview' %}
+        <th>Group</th>
         {% endif %}
         <th data-sort="num">Running</th>
         <th data-sort="num">Idle</th>
@@ -126,8 +128,20 @@
       <td>{{ counts.get('CpusPending', 0)|fmt }}</td>
     </tr>
     {% endfor %}
+    {% elif view == 'globalview' %}
+    {# globalview: pre-expanded (user, group) rows #}
+    {% for name, counts in workflows %}
+    <tr>
+      <td><a href="/{{ view }}/request/{{ name }}">{{ name }}</a></td>
+      <td><a href="/{{ view }}/group/{{ counts.get('_group', '') }}">{{ counts.get('_group', '') }}</a></td>
+      <td>{{ counts.get('Running', 0)|fmt }}</td>
+      <td>{{ counts.get('MatchingIdle', 0)|fmt }}</td>
+      <td>{{ counts.get('CpusInUse', 0)|fmt }}</td>
+      <td>{{ counts.get('CpusPending', 0)|fmt }}</td>
+    </tr>
+    {% endfor %}
     {% else %}
-    {# other views: rows have subtask dicts, need summing #}
+    {# prodview: rows have subtask dicts, need summing #}
     {% for name, subtasks in workflows %}
     {% set prio_info = subtasks.get('_priority', {}) %}
     {% set running = namespace(v=0) %}
@@ -142,10 +156,8 @@
     {% endfor %}
     <tr>
       <td><a href="/{{ view }}/request/{{ name }}">{{ name }}</a></td>
-      {% if view == 'prodview' %}
       <td>{{ prio_info.get('prio', '')|fmt if prio_info else '' }}</td>
       <td>{{ prio_info.get('block', '') }}</td>
-      {% endif %}
       <td>{{ running.v|fmt }}</td>
       <td>{{ idle.v|fmt }}</td>
       <td>{{ cpus_use.v|fmt }}</td>
@@ -156,12 +168,12 @@
     </tbody>
   </table>
   </div>
-</div>
+</details>
 
-<div class="section">
-  <h2>Sites ({{ sites|length }})</h2>
+<details class="section" open data-section="{{ view }}_sites">
+  <summary><h2>Sites ({{ sites|length }})</h2></summary>
   <div class="table-scroll">
-  <table class="data-table sortable" id="sites-table">
+  <table class="data-table sortable" id="sites-table" data-sort-default="3:desc">
     <thead>
       <tr>
         <th>Site</th>
@@ -184,12 +196,12 @@
     </tbody>
   </table>
   </div>
-</div>
+</details>
 
 {% if priorities %}
-<div class="section">
-  <h2>Priority Blocks</h2>
-  <table class="data-table sortable" id="prio-table">
+<details class="section" open data-section="{{ view }}_priority">
+  <summary><h2>Priority Blocks</h2></summary>
+  <table class="data-table sortable" id="prio-table" data-sort-default="3:desc">
     <thead><tr>
       <th>Block</th>
       <th data-sort="num">Running</th>
@@ -212,12 +224,12 @@
     {% endfor %}
     </tbody>
   </table>
-</div>
+</details>
 {% endif %}
 
 {% if fairshare %}
-<div class="section">
-  <h2>Accounting Groups ({{ fairshare|length }})</h2>
+<details class="section" open data-section="{{ view }}_fairshare">
+  <summary><h2>Accounting Groups ({{ fairshare|length }})</h2></summary>
   <table class="data-table sortable" id="acctgrp-table" data-sort-default="3:desc">
     <thead><tr>
       <th>Category</th>
@@ -229,7 +241,7 @@
     <tbody>
     {% for cat, data in fairshare.items() %}
     <tr>
-      <td>{{ cat }}</td>
+      <td><a href="/{{ view }}/group/{{ cat }}">{{ cat }}</a></td>
       <td>{{ data.get('Running', 0)|fmt }}</td>
       <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>
       <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
@@ -238,6 +250,6 @@
     {% endfor %}
     </tbody>
   </table>
-</div>
+</details>
 {% endif %}
 {% endblock %}

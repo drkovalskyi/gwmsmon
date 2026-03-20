@@ -22,10 +22,10 @@
   </div>
 </div>
 
-<div class="section">
-  <h2>Requests ({{ workflows|length }})</h2>
+<details class="section" open data-section="{{ view }}_user_requests">
+  <summary><h2>Requests ({{ workflows|length }})</h2></summary>
   <div class="table-scroll">
-  <table class="data-table sortable">
+  <table class="data-table sortable" data-sort-default="3:desc">
     <thead>
       <tr>
         <th>Request</th>
@@ -58,5 +58,5 @@
     </tbody>
   </table>
   </div>
-</div>
+</details>
 {% endblock %}

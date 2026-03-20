@@ -162,12 +162,17 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
   var viewMatch = location.pathname.match(/^\/(\w+)\//);
   var view = viewMatch ? viewMatch[1] : '';
 
-  // Load cross-reference data
+  // Load cross-reference data, then apply filters if inputs have values
   var crossRef = null;
   if (view) {
     fetch('/' + view + '/json/cross_reference.json')
       .then(function(r) { return r.ok ? r.json() : null; })
-      .then(function(d) { crossRef = d; })
+      .then(function(d) {
+        crossRef = d;
+        if ((wfInput && wfInput.value) || (siteInput && siteInput.value)) {
+          applyFilters();
+        }
+      })
       .catch(function() {});
   }
 
@@ -270,7 +275,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
     // 4. Recompute sites from visible workflows
     if (sitesTable) {
-      if (anyFilter && crossRef) {
+      if (wfFilter && crossRef) {
+        // Workflow filter active: recompute site values from visible workflows
         var siteTotals = {};
         visibleWfs.forEach(function(wf) {
           var sites = crossRef[wf];
@@ -290,19 +296,21 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
           cells[2].textContent = fmt(counts[1]);
           cells[3].textContent = fmt(counts[2]);
           cells[4].textContent = fmt(counts[3]);
-          if (cells[5]) cells[5].textContent = '';
+          // Restore original UniquePressure
+          if (cells[5] && row._origCells) cells[5].textContent = row._origCells[5];
           var siteTextMatch = !siteFilter || site.toLowerCase().indexOf(siteFilter) !== -1;
           var hasData = counts[0] || counts[1];
           row.style.display = (siteTextMatch && hasData) ? '' : 'none';
         });
       } else {
-        // No filters — restore original values
+        // No workflow filter — restore original values, apply site text filter only
         sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
           if (row._origCells) {
             var cells = row.querySelectorAll('td');
             row._origCells.forEach(function(v, i) { cells[i].textContent = v; });
           }
-          row.style.display = '';
+          var siteTextMatch = !siteFilter || (row.dataset.name || '').toLowerCase().indexOf(siteFilter) !== -1;
+          row.style.display = siteTextMatch ? '' : 'none';
         });
       }
     }
@@ -314,6 +322,9 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
   if (wfInput) wfInput.addEventListener('input', applyFilters);
   if (siteInput) siteInput.addEventListener('input', applyFilters);
+
+  // Apply on load if browser restored non-empty filter values (no cross-ref needed)
+  if (wfInput && wfInput.value && !siteInput?.value) applyFilters();
 })();
 
 // --- uPlot chart rendering ---

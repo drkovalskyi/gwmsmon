@@ -6,6 +6,7 @@ import os
 DEFAULTS = {
     "htcondor": {
         "pool": "cmsgwms-collector-global.fnal.gov:9620",
+        "negotiator_collectors": "vocms0824.cern.ch,vocms4100.cern.ch",
     },
     "prodview": {
         "basedir": "/var/www/prodview",

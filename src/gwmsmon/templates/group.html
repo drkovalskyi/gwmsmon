@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}{{ group_name }} — Global — gwmsmon{% endblock %}
+{% block content %}
+<h1><a href="/globalview/">Global</a> / {{ group_name }}</h1>
+
+<div class="stats-row">
+  <div class="stat">
+    <div class="stat-value">{{ group_totals.get('Running', 0)|fmt }}</div>
+    <div class="stat-label">Running Jobs</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ group_totals.get('MatchingIdle', 0)|fmt }}</div>
+    <div class="stat-label">Idle Jobs</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ group_totals.get('CpusInUse', 0)|fmt }}</div>
+    <div class="stat-label">CPUs in Use</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ group_totals.get('CpusPending', 0)|fmt }}</div>
+    <div class="stat-label">CPUs Pending</div>
+  </div>
+</div>
+
+<div class="graphs-row">
+  <div class="chart" data-src="/globalview/tsdata/fairshare/{{ group_name }}" data-interval="hourly"></div>
+  <div class="chart" data-src="/globalview/tsdata/fairshare/{{ group_name }}" data-interval="daily"></div>
+  <div class="chart" data-src="/globalview/tsdata/fairshare/{{ group_name }}" data-interval="weekly"></div>
+</div>
+
+<details class="section" open data-section="globalview_group_tiers">
+  <summary><h2>Fair Share by Tier</h2></summary>
+  <table class="data-table compact">
+    <thead><tr>
+      <th>Tier</th>
+      <th data-sort="num">Config Quota</th>
+      <th data-sort="num">Effective Quota</th>
+      <th>Surplus Policy</th>
+    </tr></thead>
+    <tbody>
+    {% for row in tier_rows %}
+    <tr>
+      <td>{{ row.tier }}</td>
+      <td>{{ "%.4f"|format(row.ConfigQuota) }}</td>
+      <td>{{ row.EffectiveQuota|fmt }}</td>
+      <td>{{ row.SurplusPolicy }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+
+{% for tier, tusers in tier_users.items() %}
+<details class="section" open data-section="globalview_group_prio_{{ tier }}">
+  <summary><h2>Priority — {{ tier }} ({{ tusers|length }})</h2></summary>
+  <div class="table-scroll">
+  <table class="data-table sortable" data-sort-default="3:desc">
+    <thead><tr>
+      <th>User</th>
+      <th data-sort="num">Prio Factor</th>
+      <th data-sort="num">Priority</th>
+      <th data-sort="num">Resources</th>
+      <th data-sort="num">Weighted</th>
+      <th data-sort="num">Limit</th>
+    </tr></thead>
+    <tbody>
+    {% for u in tusers %}
+    <tr>
+      <td title="{{ u.name }}">{{ u.name }}</td>
+      <td>{{ u.PriorityFactor|fmt }}</td>
+      <td>{{ u.Priority|int|fmt }}</td>
+      <td>{{ u.ResourcesUsed|int|fmt }}</td>
+      <td>{{ u.WeightedResourcesUsed|int|fmt }}</td>
+      <td>{{ u.SubmitterLimit|int|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endfor %}
+
+<details class="section" open data-section="globalview_group_users">
+  <summary><h2>Active Users ({{ users|length }})</h2></summary>
+  <div class="table-scroll">
+  <table class="data-table sortable" data-sort-default="3:desc">
+    <thead><tr>
+      <th>User</th>
+      <th data-sort="num">Running</th>
+      <th data-sort="num">Idle</th>
+      <th data-sort="num">CPUs Use</th>
+      <th data-sort="num">CPUs Pend</th>
+    </tr></thead>
+    <tbody>
+    {% for user, data in users %}
+    <tr>
+      <td><a href="/globalview/request/{{ user }}">{{ user }}</a></td>
+      <td>{{ data.Running|fmt }}</td>
+      <td>{{ data.MatchingIdle|fmt }}</td>
+      <td>{{ data.CpusInUse|fmt }}</td>
+      <td>{{ data.CpusPending|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endblock %}

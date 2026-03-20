@@ -10,7 +10,7 @@ import sys
 import time
 
 from gwmsmon import config
-from gwmsmon.query import query_all, query_history_parallel
+from gwmsmon.query import query_all, query_history_parallel, query_accounting_ads
 from gwmsmon.state import State
 
 log = logging.getLogger("gwmsmon")
@@ -69,8 +69,11 @@ def main():
 
         try:
             jobs, summary_ads, factory_data, schedd_info = query_all(cfg)
-            state.update(jobs, summary_ads, factory_data)
-            del jobs, summary_ads, factory_data
+            neg_hosts = cfg.get("htcondor", "negotiator_collectors",
+                                fallback="")
+            accounting_ads = query_accounting_ads(neg_hosts) if neg_hosts else []
+            state.update(jobs, summary_ads, factory_data, accounting_ads)
+            del jobs, summary_ads, factory_data, accounting_ads
             gc.collect()
 
             # Exit code collection via schedd.history()

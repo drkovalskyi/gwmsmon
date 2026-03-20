@@ -45,7 +45,7 @@ VIEWS = {
     },
     "globalview": {
         "title": "Global",
-        "entity_label": "User/Task",
+        "entity_label": "User",
         "show_pilots": True,
     },
     "poolview": {
@@ -186,6 +186,36 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
                 key=lambda x: (-x[1]["Running"], -x[1]["MatchingIdle"]),
             )
             entity_url_prefix = "user"
+        elif view == "globalview":
+            # Expand into (user, group) rows from _group_stats
+            rows = []
+            for user, data in workflows.items():
+                group_stats = data.get("_group_stats", {})
+                if group_stats:
+                    for group, stats in group_stats.items():
+                        if not any(stats.get(k, 0)
+                                   for k in ("Running", "MatchingIdle")):
+                            continue
+                        row = dict(stats)
+                        row["_group"] = group
+                        rows.append((user, row))
+                else:
+                    row = {"Running": 0, "MatchingIdle": 0,
+                           "CpusInUse": 0, "CpusPending": 0, "_group": ""}
+                    for st, st_data in data.items():
+                        if st.startswith("_") or not isinstance(st_data, dict):
+                            continue
+                        for k in ("Running", "MatchingIdle",
+                                  "CpusInUse", "CpusPending"):
+                            row[k] += st_data.get(k, 0)
+                    if row["Running"] or row["MatchingIdle"]:
+                        rows.append((user, row))
+            sorted_wf = sorted(
+                rows,
+                key=lambda x: (-x[1].get("CpusInUse", 0),
+                               -x[1].get("MatchingIdle", 0)),
+            )
+            entity_url_prefix = "request"
         else:
             sorted_wf = sorted(
                 workflows.items(),
@@ -227,6 +257,77 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             freshness=_freshness(updated),
             updated_ts=updated,
             entity_url_prefix=entity_url_prefix,
+        )
+
+    @app.route("/globalview/group/<name>")
+    def group_detail(name):
+        basedir = cfg.get("globalview", "basedir")
+        totals_data = _load_json(basedir, "totals.json")
+        fairshare = _load_json(basedir, "fairshare.json").get(
+            "categories", {})
+        accounting = _load_json(basedir, "accounting.json")
+
+        if name not in fairshare:
+            abort(404)
+
+        group_totals = fairshare[name]
+
+        # Filter users belonging to this group
+        workflows = totals_data.get("workflows", {})
+        users = []
+        for user, data in workflows.items():
+            if name in (data.get("_groups") or []):
+                user_totals = {"Running": 0, "MatchingIdle": 0,
+                               "CpusInUse": 0, "CpusPending": 0}
+                for st, st_data in data.items():
+                    if st.startswith("_"):
+                        continue
+                    for k in user_totals:
+                        user_totals[k] += st_data.get(k, 0)
+                users.append((user, user_totals))
+        users.sort(key=lambda x: -x[1]["CpusInUse"])
+
+        # Fair share by tier from accounting ads
+        acct_groups = accounting.get("groups", {})
+        tier_order = ["CERN", "T1", "US_T2", "nonUS_T2_T3"]
+        tier_rows = []
+        for tier in tier_order:
+            tier_groups = acct_groups.get(tier, {})
+            info = tier_groups.get(name, {})
+            tier_rows.append({
+                "tier": tier,
+                "ConfigQuota": info.get("ConfigQuota", 0),
+                "EffectiveQuota": info.get("EffectiveQuota", 0),
+                "SurplusPolicy": info.get("SurplusPolicy", ""),
+            })
+
+        # Per-tier user priority data
+        acct_users = accounting.get("users", {})
+        tier_users = {}
+        for tier in tier_order:
+            tier_user_list = [
+                u for u in acct_users.get(tier, [])
+                if u.get("group") == name
+            ]
+            tier_user_list.sort(key=lambda u: -u.get("ResourcesUsed", 0))
+            if tier_user_list:
+                tier_users[tier] = tier_user_list
+
+        summary = _load_json(basedir, "summary.json")
+        updated = summary.get("updated", 0)
+
+        return render_template(
+            "group.html",
+            view="globalview",
+            view_cfg=VIEWS["globalview"],
+            group_name=name,
+            group_totals=group_totals,
+            users=users,
+            tier_rows=tier_rows,
+            tier_users=tier_users,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
         )
 
     @app.route("/<view>/request/<path:name>")
@@ -316,6 +417,26 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             name=name,
             workflows=user_wf,
             req_totals=req_totals,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
+
+    @app.route("/poolview/schedd/<name>")
+    def schedd_detail(name):
+        basedir = cfg.get("poolview", "basedir")
+        summary = _load_json(basedir, "summary.json")
+        schedds = summary.get("schedds", {})
+        if name not in schedds:
+            abort(404)
+        schedd_data = schedds[name]
+        updated = summary.get("updated", 0)
+        return render_template(
+            "schedd.html",
+            view="poolview",
+            view_cfg=VIEWS["poolview"],
+            name=name,
+            schedd_data=schedd_data,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,
@@ -588,7 +709,9 @@ def _factoryview_site_detail(cfg, name):
 def _subtask_total(subtasks, key):
     """Sum a key across all subtasks in a workflow."""
     total = 0
-    for st_data in subtasks.values():
+    for st_name, st_data in subtasks.items():
+        if st_name.startswith("_") or not isinstance(st_data, dict):
+            continue
         total += st_data.get(key, 0)
     return total
 

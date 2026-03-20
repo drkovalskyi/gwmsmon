@@ -292,6 +292,46 @@ def query_negotiator_ads(pool):
     return [convert_ad(ad, projection) for ad in ads]
 
 
+# --- 4b-2. Negotiator accounting ads ---
+
+# Map negotiator Name prefix → site tier label
+_NEGOTIATOR_TIERS = {
+    "vocms0824": "CERN",
+    "NEGOTIATORT1": "T1",
+    "NEGOTIATORUS": "US_T2",
+}
+
+
+def negotiator_tier(neg_name):
+    """Map a NegotiatorName to a site tier label."""
+    for prefix, tier in _NEGOTIATOR_TIERS.items():
+        if neg_name.startswith(prefix):
+            return tier
+    return "nonUS_T2_T3"
+
+
+def query_accounting_ads(negotiator_collectors):
+    """Query Accounting ads from negotiator collector hosts.
+
+    Args:
+        negotiator_collectors: comma-separated collector hostnames
+
+    Returns list of plain Python dicts with accounting attributes.
+    """
+    hosts = [h.strip() for h in negotiator_collectors.split(",") if h.strip()]
+    all_ads = []
+    for host in hosts:
+        try:
+            collector = htcondor.Collector(host)
+            ads = collector.query(htcondor.AdTypes.Accounting)
+            all_ads.extend(convert_ad(ad) for ad in ads)
+            log.info("accounting ads from %s: %d", host, len(ads))
+        except Exception:
+            log.warning("failed to query accounting ads from %s", host,
+                        exc_info=True)
+    return all_ads
+
+
 # --- 4c. Factory XML feeds ---
 
 def _parse_factory_urls(factory_urls_str):

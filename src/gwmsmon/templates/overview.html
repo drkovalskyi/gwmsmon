@@ -3,25 +3,25 @@
 {% block content %}
 <h1>{{ view_cfg.title }} Overview</h1>
 
-<div class="stats-row">
+<div class="stats-row" id="stats-row">
   <div class="stat">
-    <div class="stat-value">{{ totals.get('Running', 0)|fmt }}</div>
+    <div class="stat-value" id="stat-running">{{ totals.get('Running', 0)|fmt }}</div>
     <div class="stat-label">Running Jobs</div>
   </div>
   <div class="stat">
-    <div class="stat-value">{{ totals.get('MatchingIdle', 0)|fmt }}</div>
+    <div class="stat-value" id="stat-idle">{{ totals.get('MatchingIdle', 0)|fmt }}</div>
     <div class="stat-label">Idle Jobs</div>
   </div>
   <div class="stat">
-    <div class="stat-value">{{ totals.get('CpusInUse', 0)|fmt }}</div>
+    <div class="stat-value" id="stat-cpus-use">{{ totals.get('CpusInUse', 0)|fmt }}</div>
     <div class="stat-label">CPUs in Use</div>
   </div>
   <div class="stat">
-    <div class="stat-value">{{ totals.get('CpusPending', 0)|fmt }}</div>
+    <div class="stat-value" id="stat-cpus-pend">{{ totals.get('CpusPending', 0)|fmt }}</div>
     <div class="stat-label">CPUs Pending</div>
   </div>
   <div class="stat">
-    <div class="stat-value">{{ workflows|length|fmt }}</div>
+    <div class="stat-value" id="stat-count">{{ workflows|length|fmt }}</div>
     <div class="stat-label">{{ view_cfg.entity_label }}s</div>
   </div>
   {% if exit_codes and exit_codes.get('total', 0) > 0 %}
@@ -135,7 +135,7 @@
     {% if entity_url_prefix == 'user' %}
     {# analysisview: rows are pre-aggregated user dicts #}
     {% for name, counts in workflows %}
-    <tr>
+    <tr data-name="{{ name }}" data-running="{{ counts.get('Running', 0) }}" data-idle="{{ counts.get('MatchingIdle', 0) }}" data-cpus-use="{{ counts.get('CpusInUse', 0) }}" data-cpus-pend="{{ counts.get('CpusPending', 0) }}">
       <td><a href="/{{ view }}/user/{{ name }}">{{ name }}</a></td>
       <td>{{ counts.get('Running', 0)|fmt }}</td>
       <td>{{ counts.get('MatchingIdle', 0)|fmt }}</td>
@@ -146,7 +146,7 @@
     {% elif view == 'globalview' %}
     {# globalview: pre-expanded (user, group) rows #}
     {% for name, counts in workflows %}
-    <tr>
+    <tr data-name="{{ name }}" data-running="{{ counts.get('Running', 0) }}" data-idle="{{ counts.get('MatchingIdle', 0) }}" data-cpus-use="{{ counts.get('CpusInUse', 0) }}" data-cpus-pend="{{ counts.get('CpusPending', 0) }}">
       <td><a href="/{{ view }}/request/{{ name }}">{{ name }}</a></td>
       <td><a href="/{{ view }}/group/{{ counts.get('_group', '') }}">{{ counts.get('_group', '') }}</a></td>
       <td>{{ counts.get('Running', 0)|fmt }}</td>
@@ -169,7 +169,7 @@
       {% set cpus_use.v = cpus_use.v + st_data.get('CpusInUse', 0) %}
       {% set cpus_pend.v = cpus_pend.v + st_data.get('CpusPending', 0) %}
     {% endfor %}
-    <tr>
+    <tr data-name="{{ name }}" data-running="{{ running.v }}" data-idle="{{ idle.v }}" data-cpus-use="{{ cpus_use.v }}" data-cpus-pend="{{ cpus_pend.v }}">
       <td><a href="/{{ view }}/request/{{ name }}">{{ name }}</a></td>
       <td>{{ prio_info.get('prio', '')|fmt if prio_info else '' }}</td>
       <td>{{ prio_info.get('block', '') }}</td>
@@ -202,7 +202,7 @@
     </thead>
     <tbody>
     {% for name, data in sites %}
-    <tr>
+    <tr data-name="{{ name }}">
       <td><a href="/{{ view }}/site/{{ name }}">{{ name }}</a></td>
       <td>{{ data.get('Running', 0)|fmt }}</td>
       <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>

@@ -1300,6 +1300,20 @@ class State:
                     "requests": reqs,
                 })
 
+            # Cross-reference: request → {site: [R, I, C, P]}
+            cross_ref = {}
+            for site_name, reqs in site_index.items():
+                for req, counts in reqs.items():
+                    cr = cross_ref.setdefault(req, {})
+                    cr[site_name] = [
+                        counts.get("Running", 0),
+                        counts.get("MatchingIdle", 0),
+                        counts.get("CpusInUse", 0),
+                        counts.get("CpusPending", 0),
+                    ]
+            _atomic_json(os.path.join(basedir, "cross_reference.json"),
+                         cross_ref)
+
         # poolview
         poolview_dir = cfg.get("poolview", "basedir")
         gv = snap.get("globalview", {})

@@ -72,6 +72,16 @@ function toggleTheme() {
   setInterval(refresh, 1000);
 })();
 
+// Re-sort a table by its currently active sort column
+function resortTable(table) {
+  if (!table) return;
+  var th = table.querySelector('th.sort-asc') || table.querySelector('th.sort-desc');
+  if (th) {
+    var dir = th.classList.contains('sort-asc') ? 'asc' : 'desc';
+    sortTable(th, dir);
+  }
+}
+
 // Table sorting
 function sortTable(th, forceDir) {
   var table = th.closest('table');
@@ -117,20 +127,194 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
   if (th) sortTable(th, dir);
 });
 
-// Table filtering
-document.querySelectorAll('.table-filter').forEach(function(input) {
-  var tableId = input.dataset.table;
-  var table = document.getElementById(tableId);
-  if (!table) return;
+// Cross-filter: workflows ↔ sites ↔ stats
+(function() {
+  var wfInput = document.querySelector('.table-filter[data-table="wf-table"]');
+  var siteInput = document.querySelector('.table-filter[data-table="sites-table"]');
+  var wfTable = document.getElementById('wf-table');
+  var sitesTable = document.getElementById('sites-table');
 
-  input.addEventListener('input', function() {
-    var filter = input.value.toLowerCase();
-    table.querySelectorAll('tbody tr').forEach(function(row) {
-      var text = row.textContent.toLowerCase();
-      row.style.display = text.indexOf(filter) !== -1 ? '' : 'none';
+  // Number formatter matching Jinja |fmt filter
+  function fmt(n) {
+    if (n >= 1e6) return (n/1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1e3) return n.toLocaleString('en-US');
+    return String(n);
+  }
+
+  // Fallback: simple filter for tables without cross-filter
+  document.querySelectorAll('.table-filter').forEach(function(input) {
+    if (input === wfInput || input === siteInput) return;
+    var tableId = input.dataset.table;
+    var table = document.getElementById(tableId);
+    if (!table) return;
+    input.addEventListener('input', function() {
+      var filter = input.value.toLowerCase();
+      table.querySelectorAll('tbody tr').forEach(function(row) {
+        var text = row.textContent.toLowerCase();
+        row.style.display = text.indexOf(filter) !== -1 ? '' : 'none';
+      });
     });
   });
-});
+
+  if (!wfTable) return;
+
+  // Detect view from page URL
+  var viewMatch = location.pathname.match(/^\/(\w+)\//);
+  var view = viewMatch ? viewMatch[1] : '';
+
+  // Load cross-reference data
+  var crossRef = null;
+  if (view) {
+    fetch('/' + view + '/json/cross_reference.json')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) { crossRef = d; })
+      .catch(function() {});
+  }
+
+  // Save original site cell values
+  if (sitesTable) {
+    sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
+      row._origCells = Array.from(row.querySelectorAll('td')).map(function(td) {
+        return td.textContent;
+      });
+    });
+  }
+
+  function applyFilters() {
+    var wfFilter = wfInput ? wfInput.value.toLowerCase() : '';
+    var siteFilter = siteInput ? siteInput.value.toLowerCase() : '';
+    var anyFilter = wfFilter || siteFilter;
+
+    // 1. Build set of site names matching siteFilter text
+    var matchingSites = null;
+    if (siteFilter && sitesTable) {
+      matchingSites = new Set();
+      sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
+        if (row.dataset.name && row.dataset.name.toLowerCase().indexOf(siteFilter) !== -1) {
+          matchingSites.add(row.dataset.name);
+        }
+      });
+    }
+
+    // 2. Filter workflow rows: text match AND site match
+    var visibleWfs = new Set();
+    var totals = {running: 0, idle: 0, cpusUse: 0, cpusPend: 0, count: 0};
+    wfTable.querySelectorAll('tbody tr').forEach(function(row) {
+      var textMatch = !wfFilter || row.textContent.toLowerCase().indexOf(wfFilter) !== -1;
+      var siteMatch = true;
+      var name = row.dataset.name;
+      var wfCounts = null; // per-site contribution for this workflow
+      if (matchingSites && crossRef) {
+        var wfSites = name ? crossRef[name] : null;
+        if (wfSites) {
+          siteMatch = false;
+          wfCounts = [0, 0, 0, 0];
+          for (var s in wfSites) {
+            if (matchingSites.has(s)) {
+              siteMatch = true;
+              var v = wfSites[s];
+              wfCounts[0] += v[0]; wfCounts[1] += v[1];
+              wfCounts[2] += v[2]; wfCounts[3] += v[3];
+            }
+          }
+        } else {
+          siteMatch = false;
+        }
+      }
+      var visible = textMatch && siteMatch;
+      row.style.display = visible ? '' : 'none';
+
+      // Save original cell values once
+      if (!row._origCells) {
+        row._origCells = Array.from(row.querySelectorAll('td')).map(function(td) {
+          return td.textContent;
+        });
+      }
+
+      // Update workflow row cells when site filter is active
+      var cells = row.querySelectorAll('td');
+      var n = cells.length;
+      if (matchingSites && wfCounts) {
+        // Last 4 cells are always: Running, Idle, CPUs Use, CPUs Pend
+        cells[n - 4].textContent = fmt(wfCounts[0]);
+        cells[n - 3].textContent = fmt(wfCounts[1]);
+        cells[n - 2].textContent = fmt(wfCounts[2]);
+        cells[n - 1].textContent = fmt(wfCounts[3]);
+      } else if (!matchingSites) {
+        // Restore original values
+        row._origCells.forEach(function(v, i) { cells[i].textContent = v; });
+      }
+
+      if (visible) {
+        if (name) visibleWfs.add(name);
+        totals.count++;
+        if (wfCounts) {
+          totals.running += wfCounts[0]; totals.idle += wfCounts[1];
+          totals.cpusUse += wfCounts[2]; totals.cpusPend += wfCounts[3];
+        } else {
+          totals.running += parseInt(row.dataset.running) || 0;
+          totals.idle += parseInt(row.dataset.idle) || 0;
+          totals.cpusUse += parseInt(row.dataset.cpusUse) || 0;
+          totals.cpusPend += parseInt(row.dataset.cpusPend) || 0;
+        }
+      }
+    });
+
+    // 3. Update stats row
+    var el;
+    if ((el = document.getElementById('stat-running'))) el.textContent = fmt(totals.running);
+    if ((el = document.getElementById('stat-idle'))) el.textContent = fmt(totals.idle);
+    if ((el = document.getElementById('stat-cpus-use'))) el.textContent = fmt(totals.cpusUse);
+    if ((el = document.getElementById('stat-cpus-pend'))) el.textContent = fmt(totals.cpusPend);
+    if ((el = document.getElementById('stat-count'))) el.textContent = fmt(totals.count);
+
+    // 4. Recompute sites from visible workflows
+    if (sitesTable) {
+      if (anyFilter && crossRef) {
+        var siteTotals = {};
+        visibleWfs.forEach(function(wf) {
+          var sites = crossRef[wf];
+          if (!sites) return;
+          for (var site in sites) {
+            var v = sites[site];
+            var s = siteTotals[site];
+            if (!s) { s = [0,0,0,0]; siteTotals[site] = s; }
+            s[0] += v[0]; s[1] += v[1]; s[2] += v[2]; s[3] += v[3];
+          }
+        });
+        sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
+          var site = row.dataset.name;
+          var counts = siteTotals[site] || [0,0,0,0];
+          var cells = row.querySelectorAll('td');
+          cells[1].textContent = fmt(counts[0]);
+          cells[2].textContent = fmt(counts[1]);
+          cells[3].textContent = fmt(counts[2]);
+          cells[4].textContent = fmt(counts[3]);
+          if (cells[5]) cells[5].textContent = '';
+          var siteTextMatch = !siteFilter || site.toLowerCase().indexOf(siteFilter) !== -1;
+          var hasData = counts[0] || counts[1];
+          row.style.display = (siteTextMatch && hasData) ? '' : 'none';
+        });
+      } else {
+        // No filters — restore original values
+        sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
+          if (row._origCells) {
+            var cells = row.querySelectorAll('td');
+            row._origCells.forEach(function(v, i) { cells[i].textContent = v; });
+          }
+          row.style.display = '';
+        });
+      }
+    }
+
+    // Re-sort tables after cell values changed
+    resortTable(wfTable);
+    resortTable(sitesTable);
+  }
+
+  if (wfInput) wfInput.addEventListener('input', applyFilters);
+  if (siteInput) siteInput.addEventListener('input', applyFilters);
+})();
 
 // --- uPlot chart rendering ---
 (function() {

@@ -69,13 +69,13 @@ def _add_counts(target, status, cpus):
 
 # B0 (highest) through B7 (lowest), derived from JobPrio thresholds
 _PRIO_THRESHOLDS = [
-    ("B0", 210000),
-    ("B1", 200000),
-    ("B2", 190000),
-    ("B3", 180000),
-    ("B4", 170000),
-    ("B5", 160000),
-    ("B6", 150000),
+    ("B0", 130000),
+    ("B1", 110000),
+    ("B2", 90000),
+    ("B3", 85000),
+    ("B4", 80000),
+    ("B5", 70000),
+    ("B6", 63000),
     ("B7", 0),
 ]
 
@@ -245,17 +245,30 @@ class State:
         # view totals
         _add_counts(view["totals"], status, cpus)
 
-        # per-site totals
-        target_site = site if status == 2 else None
-        if target_site:
-            s = _ensure(view["sites"], target_site)
-            for k, v in _zero_counts().items():
+        # per-site totals (running)
+        if site and status == 2:
+            s = _ensure(view["sites"], site)
+            for k in _zero_counts():
                 s.setdefault(k, 0)
             _add_counts(s, status, cpus)
 
+        # per-site idle pressure (matching idle per desired site)
+        if status == 1 and desired:
+            sites_list = [s.strip() for s in desired.split(",")]
+            unique = len(sites_list) == 1
+            for s in sites_list:
+                sv = _ensure(view["sites"], s)
+                for k in _zero_counts():
+                    sv.setdefault(k, 0)
+                sv["MatchingIdle"] += 1
+                sv["CpusPending"] += cpus
+                sv.setdefault("UniquePressure", 0)
+                if unique:
+                    sv["UniquePressure"] += 1
+
         # per-schedd totals
         sd = _ensure(view["schedds"], schedd_name)
-        for k, v in _zero_counts().items():
+        for k in _zero_counts():
             sd.setdefault(k, 0)
         _add_counts(sd, status, cpus)
 
@@ -311,13 +324,26 @@ class State:
         # view totals
         _add_counts(view["totals"], status, cpus)
 
-        # per-site
-        target_site = site if status == 2 else None
-        if target_site:
-            s = _ensure(view["sites"], target_site)
-            for k, v in _zero_counts().items():
+        # per-site totals (running)
+        if site and status == 2:
+            s = _ensure(view["sites"], site)
+            for k in _zero_counts():
                 s.setdefault(k, 0)
             _add_counts(s, status, cpus)
+
+        # per-site idle pressure
+        if status == 1 and desired:
+            sites_list = [s.strip() for s in desired.split(",")]
+            unique_site = len(sites_list) == 1
+            for s in sites_list:
+                sv = _ensure(view["sites"], s)
+                for k in _zero_counts():
+                    sv.setdefault(k, 0)
+                sv["MatchingIdle"] += 1
+                sv["CpusPending"] += cpus
+                sv.setdefault("UniquePressure", 0)
+                if unique_site:
+                    sv["UniquePressure"] += 1
 
         # per-schedd
         sd = _ensure(view["schedds"], schedd_name)
@@ -329,6 +355,7 @@ class State:
         owner = job.get("Owner", "unknown")
         schedd_name = job.get("_schedd", "unknown")
         site = job.get("MATCH_GLIDEIN_CMSSite")
+        desired = job.get("DESIRED_Sites")
 
         # Task identifier fallback chain
         dagman_id = job.get("DAGManJobId")
@@ -374,12 +401,26 @@ class State:
         if status in (1, 2):
             _add_counts(view["totals"], status, cpus)
 
-        # per-site totals
+        # per-site totals (running)
         if site and status == 2:
             s = _ensure(view["sites"], site)
-            for k, v in _zero_counts().items():
+            for k in _zero_counts():
                 s.setdefault(k, 0)
             _add_counts(s, status, cpus)
+
+        # per-site idle pressure
+        if status == 1 and desired:
+            sites_list = [s.strip() for s in desired.split(",")]
+            unique_site = len(sites_list) == 1
+            for s in sites_list:
+                sv = _ensure(view["sites"], s)
+                for k in _zero_counts():
+                    sv.setdefault(k, 0)
+                sv["MatchingIdle"] += 1
+                sv["CpusPending"] += cpus
+                sv.setdefault("UniquePressure", 0)
+                if unique_site:
+                    sv["UniquePressure"] += 1
 
         # per-schedd
         sd = _ensure(view["schedds"], schedd_name)
@@ -1212,14 +1253,14 @@ class State:
                 "sites": view_data.get("sites", {}),
             })
 
-            # Per-request detail files (full subtask × site breakdown)
+            # Per-request detail files + per-site reverse index
             wf_source = (view_data.get("workflows", {})
                          if view != "globalview"
                          else view_data.get("users", {}))
+            site_index = {}  # site → {req: counts}
             for req, subtasks in wf_source.items():
                 req_dir = os.path.join(basedir, req.replace("/", os.sep))
                 os.makedirs(req_dir, exist_ok=True)
-                # Aggregate site counts across subtasks
                 req_sites = {}
                 for st_name, sites_data in subtasks.items():
                     if st_name == "Summary" or st_name.startswith("_"):
@@ -1241,6 +1282,22 @@ class State:
                         for st, data in subtasks.items()
                     },
                     "sites": req_sites,
+                })
+                # Build reverse index
+                for site_name, counts in req_sites.items():
+                    if any(counts.values()):
+                        si = site_index.setdefault(site_name, {})
+                        si[req] = dict(counts)
+
+            # Write per-site detail files
+            site_dir = os.path.join(basedir, "_sites")
+            if site_index:
+                os.makedirs(site_dir, exist_ok=True)
+            for site_name, reqs in site_index.items():
+                safe = site_name.replace("/", "_")
+                _atomic_json(os.path.join(site_dir, f"{safe}.json"), {
+                    "updated": self.updated,
+                    "requests": reqs,
                 })
 
         # poolview

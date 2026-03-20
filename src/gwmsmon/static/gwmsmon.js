@@ -11,17 +11,16 @@ function toggleTheme() {
   location.reload();
 }
 
-// Details collapse state cookie
+// Details collapse state cookies (one per data-section key)
 (function() {
-  var details = document.querySelector('details.section[data-view]');
-  if (!details) return;
-  var view = details.dataset.view;
-  var key = 'details_' + view;
-  var m = document.cookie.match(new RegExp('(?:^|;\\s*)' + key + '=(\\d)'));
-  if (m && m[1] === '0') details.removeAttribute('open');
-  details.addEventListener('toggle', function() {
-    var val = details.open ? '1' : '0';
-    document.cookie = key + '=' + val + ';path=/;max-age=31536000;SameSite=Lax';
+  document.querySelectorAll('details.section[data-section]').forEach(function(details) {
+    var key = 'sec_' + details.dataset.section;
+    var m = document.cookie.match(new RegExp('(?:^|;\\s*)' + key + '=(\\d)'));
+    if (m && m[1] === '0') details.removeAttribute('open');
+    details.addEventListener('toggle', function() {
+      var val = details.open ? '1' : '0';
+      document.cookie = key + '=' + val + ';path=/;max-age=31536000;SameSite=Lax';
+    });
   });
 })();
 
@@ -100,7 +99,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
   input.addEventListener('input', function() {
     var filter = input.value.toLowerCase();
     table.querySelectorAll('tbody tr').forEach(function(row) {
-      var text = row.children[0].textContent.toLowerCase();
+      var text = row.textContent.toLowerCase();
       row.style.display = text.indexOf(filter) !== -1 ? '' : 'none';
     });
   });
@@ -115,7 +114,7 @@ document.querySelectorAll('.table-filter').forEach(function(input) {
   var AXIS_STROKE = isDark ? '#999' : '#888';
   var AXIS_LABEL_STROKE = isDark ? '#bbb' : '#444';
   var YLIM_PAD = 0.20;
-  var CHART_W = 350;
+  var CHART_W = 280;
   var CHART_H = 300;
   var LABEL_H = 18;
   var GAP_H = 8;

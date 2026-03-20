@@ -151,12 +151,13 @@ details.section > summary {
 }
 details.section > summary::-webkit-details-marker { display: none; }
 details.section > summary h2::before {
-  content: "\25bc ";
+  content: "\25bc";
   font-size: 10px;
   vertical-align: 1px;
+  margin-right: 6px;
 }
 details.section:not([open]) > summary h2::before {
-  content: "\25b6 ";
+  content: "\25b6";
 }
 
 /* Stats */
@@ -200,7 +201,7 @@ details.section:not([open]) > summary h2::before {
 }
 
 .chart {
-  width: 350px;
+  width: 280px;
   min-height: 260px;
   background: var(--bg-card);
   border-radius: 4px;
@@ -283,6 +284,12 @@ details.section:not([open]) > summary h2::before {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+}
+.data-table td:first-child:hover {
+  white-space: normal;
+  word-break: break-all;
+  overflow: visible;
 }
 
 .data-table td a { color: var(--text-link); text-decoration: none; }

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} — Pool — gwmsmon{% endblock %}
+{% block content %}
+<h1><a href="/poolview/">Pool</a> / {{ name }}</h1>
+
+<div class="stats-row">
+  <div class="stat">
+    <div class="stat-value">{{ schedd_data.get('TotalRunningJobs', 0)|fmt }}</div>
+    <div class="stat-label">Running</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ schedd_data.get('TotalIdleJobs', 0)|fmt }}</div>
+    <div class="stat-label">Idle</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ schedd_data.get('TotalHeldJobs', 0)|fmt }}</div>
+    <div class="stat-label">Held</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ schedd_data.get('MaxJobsRunning', 0)|fmt }}</div>
+    <div class="stat-label">Max Jobs</div>
+  </div>
+  {% set pct = schedd_data.get('PercentUse', 0) %}
+  <div class="stat">
+    <div class="stat-value {% if pct > 90 %}use-red{% elif pct > 70 %}use-yellow{% else %}use-green{% endif %}">{{ pct }}%</div>
+    <div class="stat-label">Utilization</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ schedd_data.get('CMSGWMS_Type', '') }}</div>
+    <div class="stat-label">Type</div>
+  </div>
+</div>
+
+<div class="graphs-row">
+  <div class="chart" data-src="/poolview/tsdata/schedd/{{ name }}" data-interval="hourly" data-chart-type="simple"></div>
+  <div class="chart" data-src="/poolview/tsdata/schedd/{{ name }}" data-interval="daily" data-chart-type="simple"></div>
+  <div class="chart" data-src="/poolview/tsdata/schedd/{{ name }}" data-interval="weekly" data-chart-type="simple"></div>
+</div>
+{% endblock %}

@@ -103,6 +103,7 @@
         <th data-sort="num">Idle</th>
         <th data-sort="num">CPUs Use</th>
         <th data-sort="num">CPUs Pend</th>
+        <th data-sort="num">Uniq Pressure</th>
       </tr>
     </thead>
     <tbody>
@@ -113,6 +114,7 @@
       <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>
       <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
       <td>{{ data.get('CpusPending', 0)|fmt }}</td>
+      <td>{{ data.get('UniquePressure', 0)|fmt }}</td>
     </tr>
     {% endfor %}
     </tbody>

@@ -38,13 +38,27 @@
   {% endif %}
 </div>
 
+{% if view == 'prodview' %}
+{# === PRODVIEW: Tabbed layout === #}
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tab-overview">Overview</button>
+  <button class="tab-btn" data-tab="tab-priority">CPU Priority</button>
+  <button class="tab-btn" data-tab="tab-completion">Completion</button>
+</div>
+
+<div class="tab-pane active" id="tab-overview">
+{% endif %}
+
 <div class="graphs-row">
   <div class="chart" data-src="/{{ view }}/tsdata/summary" data-interval="hourly"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/summary" data-interval="daily"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/summary" data-interval="weekly"></div>
+  {% if view != 'prodview' %}
   <div class="chart" data-src="/{{ view }}/json/completion_histogram.json" data-chart-type="histogram"></div>
+  {% endif %}
 </div>
 
+{% if view != 'prodview' %}
 {% set wins = exit_codes.get('windows', {}) if exit_codes else {} %}
 {% set any_completions = wins.get('1h', {}).get('total', 0) > 0 or wins.get('24h', {}).get('total', 0) > 0 or wins.get('7d', {}).get('total', 0) > 0 %}
 {% if any_completions %}
@@ -94,6 +108,7 @@
   </table>
   {% endif %}
 </details>
+{% endif %}
 {% endif %}
 
 <details class="section" open data-section="{{ view }}_workflows">
@@ -172,6 +187,7 @@
 
 <details class="section" open data-section="{{ view }}_sites">
   <summary><h2>Sites ({{ sites|length }})</h2></summary>
+  <input type="text" class="table-filter" placeholder="Filter..." data-table="sites-table">
   <div class="table-scroll">
   <table class="data-table sortable" id="sites-table" data-sort-default="3:desc">
     <thead>
@@ -181,6 +197,7 @@
         <th data-sort="num">Idle</th>
         <th data-sort="num">CPUs Use</th>
         <th data-sort="num">CPUs Pend</th>
+        <th data-sort="num">Uniq Pressure</th>
       </tr>
     </thead>
     <tbody>
@@ -191,6 +208,7 @@
       <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>
       <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
       <td>{{ data.get('CpusPending', 0)|fmt }}</td>
+      <td>{{ data.get('UniquePressure', 0)|fmt }}</td>
     </tr>
     {% endfor %}
     </tbody>
@@ -198,6 +216,110 @@
   </div>
 </details>
 
+{% if view == 'prodview' %}
+</div>{# end tab-overview #}
+
+<div class="tab-pane" id="tab-priority">
+  <h2>CPU Priority Overview</h2>
+  <div class="graphs-row">
+    <div class="chart" data-src="/{{ view }}/tsdata/priorities" data-interval="hourly" data-chart-type="stacked" data-stacked-metric="CpusInUse" data-stacked-label="Running CPUs"></div>
+    <div class="chart" data-src="/{{ view }}/tsdata/priorities" data-interval="daily" data-chart-type="stacked" data-stacked-metric="CpusInUse" data-stacked-label="Running CPUs"></div>
+    <div class="chart" data-src="/{{ view }}/tsdata/priorities" data-interval="weekly" data-chart-type="stacked" data-stacked-metric="CpusInUse" data-stacked-label="Running CPUs"></div>
+  </div>
+  <div class="graphs-row">
+    <div class="chart" data-src="/{{ view }}/tsdata/priorities" data-interval="hourly" data-chart-type="stacked" data-stacked-metric="CpusPending" data-stacked-label="Pending CPUs"></div>
+    <div class="chart" data-src="/{{ view }}/tsdata/priorities" data-interval="daily" data-chart-type="stacked" data-stacked-metric="CpusPending" data-stacked-label="Pending CPUs"></div>
+    <div class="chart" data-src="/{{ view }}/tsdata/priorities" data-interval="weekly" data-chart-type="stacked" data-stacked-metric="CpusPending" data-stacked-label="Pending CPUs"></div>
+  </div>
+
+  {% if priorities %}
+  <details class="section" open data-section="{{ view }}_priority">
+    <summary><h2>Priority Blocks</h2></summary>
+    <table class="data-table sortable" id="prio-table" data-sort-default="3:desc">
+      <thead><tr>
+        <th>Block</th>
+        <th data-sort="num">Running</th>
+        <th data-sort="num">Idle</th>
+        <th data-sort="num">CPUs Use</th>
+        <th data-sort="num">CPUs Pend</th>
+      </tr></thead>
+      <tbody>
+      {% for block in ['B0','B1','B2','B3','B4','B5','B6','B7'] %}
+      {% set data = priorities.get(block, {}) %}
+      {% if data %}
+      <tr>
+        <td>{{ block }}</td>
+        <td>{{ data.get('Running', 0)|fmt }}</td>
+        <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>
+        <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
+        <td>{{ data.get('CpusPending', 0)|fmt }}</td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</div>{# end tab-priority #}
+
+<div class="tab-pane" id="tab-completion">
+  <div class="graphs-row">
+    <div class="chart" data-src="/{{ view }}/json/completion_histogram.json" data-chart-type="histogram"></div>
+  </div>
+
+  {% set wins = exit_codes.get('windows', {}) if exit_codes else {} %}
+  {% set any_completions = wins.get('1h', {}).get('total', 0) > 0 or wins.get('24h', {}).get('total', 0) > 0 or wins.get('7d', {}).get('total', 0) > 0 %}
+  {% if any_completions %}
+  <details class="section" open data-section="{{ view }}_completion">
+    <summary><h2>Completion Summary</h2></summary>
+    <table class="data-table compact">
+      <thead><tr>
+        <th>Window</th>
+        <th data-sort="num">Completed</th>
+        <th data-sort="num">Failed</th>
+        <th data-sort="num">Failure Rate</th>
+      </tr></thead>
+      <tbody>
+      {% for wlabel in ['1h', '24h', '7d'] %}
+      {% set w = wins.get(wlabel, {}) %}
+      {% if w.get('total', 0) > 0 %}
+      <tr>
+        <td>{{ wlabel }}</td>
+        <td>{{ w.total|fmt }}</td>
+        <td>{{ w.failures|fmt }}</td>
+        <td class="{% if w.failure_rate > 0.05 %}warn{% endif %}">{{ (w.failure_rate * 100)|round(1) }}%</td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+
+    {% if exit_codes.get('annotated') %}
+    <h3 style="margin:12px 0 6px;font-size:13px;color:var(--text-th)">Exit Codes (last hour)</h3>
+    <table class="data-table compact sortable" data-sort-default="2:desc">
+      <thead><tr>
+        <th data-sort="num">Exit Code</th>
+        <th>Description</th>
+        <th data-sort="num">Count</th>
+      </tr></thead>
+      <tbody>
+      {% for entry in exit_codes.annotated %}
+      {% if entry.code != '0' %}
+      <tr>
+        <td><a href="/{{ view }}/exitcode/{{ entry.code }}">{{ entry.code }}</a></td>
+        <td>{{ entry.desc }}</td>
+        <td>{{ entry.count|fmt }}</td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </details>
+  {% endif %}
+</div>{# end tab-completion #}
+{% else %}
+{# non-prodview: priority blocks inline #}
 {% if priorities %}
 <details class="section" open data-section="{{ view }}_priority">
   <summary><h2>Priority Blocks</h2></summary>
@@ -225,6 +347,7 @@
     </tbody>
   </table>
 </details>
+{% endif %}
 {% endif %}
 
 {% if fairshare %}

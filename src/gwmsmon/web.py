@@ -455,6 +455,16 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         if name not in sites:
             abort(404)
 
+        # Per-site request breakdown
+        safe_site = name.replace("/", "_")
+        site_detail_data = _load_json(
+            os.path.join(basedir, "_sites"), f"{safe_site}.json")
+        site_requests = site_detail_data.get("requests", {})
+        sorted_requests = sorted(
+            site_requests.items(),
+            key=lambda x: -x[1].get("CpusInUse", 0),
+        )
+
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
 
@@ -464,6 +474,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             view_cfg=VIEWS[view],
             name=name,
             site_data=sites[name],
+            requests=sorted_requests,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,
@@ -564,6 +575,20 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         kind = parts[0]
         if kind == "summary":
             filename = "_summary.json"
+        elif kind == "priorities" and len(parts) == 1:
+            # Combined endpoint: merge all priority block timeseries
+            ts_dir = os.path.join(basedir, "timeseries")
+            blocks = ["B0", "B1", "B2", "B3", "B4", "B5", "B6", "B7"]
+            combined = {}
+            for block in blocks:
+                fname = f"priority_{block}.json"
+                data = _load_json(ts_dir, fname)
+                if data.get("series"):
+                    combined[block] = data["series"]
+            from flask import jsonify
+            resp = jsonify(combined)
+            resp.headers["Cache-Control"] = "max-age=120, public"
+            return resp
         elif kind in ("request", "site", "schedd", "fairshare",
                       "priority") and len(parts) == 2:
             safe = parts[1].replace("/", "_")

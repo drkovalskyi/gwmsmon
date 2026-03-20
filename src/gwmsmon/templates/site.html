@@ -10,7 +10,7 @@
   </div>
   <div class="stat">
     <div class="stat-value">{{ site_data.get('MatchingIdle', 0)|fmt }}</div>
-    <div class="stat-label">Idle Jobs</div>
+    <div class="stat-label">Matching Idle</div>
   </div>
   <div class="stat">
     <div class="stat-value">{{ site_data.get('CpusInUse', 0)|fmt }}</div>
@@ -20,6 +20,12 @@
     <div class="stat-value">{{ site_data.get('CpusPending', 0)|fmt }}</div>
     <div class="stat-label">CPUs Pending</div>
   </div>
+  {% if site_data.get('UniquePressure', 0) %}
+  <div class="stat">
+    <div class="stat-value">{{ site_data.get('UniquePressure', 0)|fmt }}</div>
+    <div class="stat-label">Unique Pressure</div>
+  </div>
+  {% endif %}
 </div>
 
 <div class="graphs-row">
@@ -27,4 +33,33 @@
   <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="daily"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="weekly"></div>
 </div>
+
+{% if requests %}
+<details class="section" open data-section="{{ view }}_site_requests">
+  <summary><h2>{% if view == 'globalview' %}Users{% else %}Requests{% endif %} ({{ requests|length }})</h2></summary>
+  <input type="text" class="table-filter" placeholder="Filter..." data-table="site-req-table">
+  <div class="table-scroll">
+  <table class="data-table sortable" id="site-req-table" data-sort-default="3:desc">
+    <thead><tr>
+      <th>{% if view == 'globalview' %}User{% else %}Request{% endif %}</th>
+      <th data-sort="num">Running</th>
+      <th data-sort="num">Idle</th>
+      <th data-sort="num">CPUs Use</th>
+      <th data-sort="num">CPUs Pend</th>
+    </tr></thead>
+    <tbody>
+    {% for req_name, data in requests %}
+    <tr>
+      <td><a href="/{{ view }}/request/{{ req_name }}">{{ req_name }}</a></td>
+      <td>{{ data.get('Running', 0)|fmt }}</td>
+      <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>
+      <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
+      <td>{{ data.get('CpusPending', 0)|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endif %}
 {% endblock %}

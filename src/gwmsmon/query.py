@@ -51,6 +51,14 @@ JOB_PROJECTION = [
     "DAG_NodesFailed",
     "DAG_NodesQueued",
     "DAG_NodesReady",
+    "CMS_JobType",
+    "CMS_RequestType",
+    "CMS_CampaignName",
+    "CMS_Type",
+    "CMSSW_Versions",
+    "OriginalMaxWallTimeMins",
+    "OriginalMemory",
+    "RequestDisk",
 ]
 
 # Projection for history queries (exit code collection, SPEC 4.5)

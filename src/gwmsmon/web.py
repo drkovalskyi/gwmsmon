@@ -351,6 +351,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         updated = summary.get("updated", 0)
 
         prio_info = subtasks.get("_priority", {})
+        metadata = detail.get("subtasks", {}).get("_metadata", {})
 
         # Compute request-level totals from subtasks
         req_totals = {"Running": 0, "MatchingIdle": 0,
@@ -376,6 +377,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             subtasks=subtasks,
             req_totals=req_totals,
             prio_info=prio_info,
+            metadata=metadata,
             exit_codes=exit_codes,
             sites=sorted_sites,
             updated=updated,

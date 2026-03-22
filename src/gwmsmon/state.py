@@ -213,6 +213,18 @@ class State:
             st.setdefault(k, 0)
         _add_counts(st, status, cpus)
 
+        # per-request metadata (capture once from first job)
+        req_meta = _ensure(view["workflows"], request, "_metadata")
+        if not req_meta:
+            for attr in ("CMS_JobType", "CMS_RequestType",
+                         "CMS_CampaignName", "CMS_Type",
+                         "CMSSW_Versions", "OriginalMaxWallTimeMins",
+                         "OriginalMemory", "RequestDisk", "Owner",
+                         "DESIRED_Sites"):
+                val = job.get(attr)
+                if val is not None:
+                    req_meta[attr] = val
+
         # per-subtask priority
         st_prio = _ensure(view["workflows"], request, subtask, "_priority")
         st_prio.setdefault(prio, 0)

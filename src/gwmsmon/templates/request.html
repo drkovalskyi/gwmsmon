@@ -32,6 +32,37 @@
   {% endif %}
 </div>
 
+{% if view == 'prodview' %}
+<div style="margin-bottom:12px">
+  <a href="https://cmsweb.cern.ch/reqmgr2/data/request?name={{ name }}" target="_blank" rel="noopener">View in Request Manager</a>
+</div>
+{% endif %}
+
+{% if metadata %}
+<details class="section" open data-section="{{ view }}_req_metadata">
+  <summary><h2>Workflow Info</h2></summary>
+  <table class="data-table compact">
+    <tbody>
+    {% for label, key, suffix in [
+      ('Job Type', 'CMS_JobType', ''),
+      ('Request Type', 'CMS_RequestType', ''),
+      ('Campaign', 'CMS_CampaignName', ''),
+      ('CMSSW', 'CMSSW_Versions', ''),
+      ('Owner', 'Owner', ''),
+      ('Memory', 'OriginalMemory', ' MB'),
+      ('Walltime', 'OriginalMaxWallTimeMins', ' min'),
+      ('Disk', 'RequestDisk', ' KB'),
+      ('Desired Sites', 'DESIRED_Sites', ''),
+    ] %}
+    {% if metadata.get(key) %}
+    <tr><td style="font-weight:600;color:var(--text-th);white-space:nowrap">{{ label }}</td><td>{{ metadata[key] }}{{ suffix }}</td></tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+
 <div class="graphs-row">
   <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="hourly"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="daily"></div>

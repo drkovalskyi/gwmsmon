@@ -921,6 +921,26 @@ class State:
                                      if wf_total else 0),
                     "sites": wf_sites_ec,
                 })
+                # Per-request completion histogram
+                wf_buckets = self.exit_codes.get(view, {}).get(wf, {})
+                wf_hist = {}
+                for ts, tcodes in wf_buckets.items():
+                    if ts not in wf_hist:
+                        wf_hist[ts] = {"success": 0, "failure": 0}
+                    for code, cnt in tcodes.items():
+                        if code == "0":
+                            wf_hist[ts]["success"] += cnt
+                        else:
+                            wf_hist[ts]["failure"] += cnt
+                hist_ts = sorted(wf_hist.keys())
+                _atomic_json(
+                    os.path.join(wf_dir, "completion_histogram.json"), {
+                    "updated": self.updated,
+                    "bucket_size": EXIT_CODE_BUCKET,
+                    "timestamps": hist_ts,
+                    "success": [wf_hist[t]["success"] for t in hist_ts],
+                    "failure": [wf_hist[t]["failure"] for t in hist_ts],
+                })
 
             # Per-workflow totals (all codes) for failure rate context
             wf_totals = {}  # {wf: total_completed}
@@ -1004,6 +1024,8 @@ class State:
 
             # View-level per-site completion stats (aggregated across all workflows)
             view_site_ec = {}
+            site_codes_1h = {}  # {site: {code: count}} for 1h window
+            cutoff_1h = now_site - EXIT_CODE_WINDOWS["1h"]
             for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
                 for site, buckets in site_data.items():
                     for wlabel, wsec in EXIT_CODE_WINDOWS.items():
@@ -1018,13 +1040,27 @@ class State:
                                 sw["total"] += cnt
                                 if code != "0":
                                     sw["failures"] += cnt
+                    # Per-code counts for 1h window
+                    for ts, codes in buckets.items():
+                        if ts < cutoff_1h:
+                            continue
+                        sc = site_codes_1h.setdefault(site, {})
+                        for code, cnt in codes.items():
+                            sc.setdefault(code, 0)
+                            sc[code] += cnt
             for site, site_wins in view_site_ec.items():
                 for w in site_wins.values():
                     w["failure_rate"] = (round(w["failures"] / w["total"], 4)
                                          if w["total"] else 0)
+            # Merge per-code counts into site data
+            site_ec_out = {}
+            for site, wins in view_site_ec.items():
+                entry = dict(wins)
+                entry["codes"] = site_codes_1h.get(site, {})
+                site_ec_out[site] = entry
             _atomic_json(os.path.join(basedir, "site_exit_codes.json"), {
                 "updated": self.updated,
-                "sites": view_site_ec,
+                "sites": site_ec_out,
             })
 
             # Per-site per-request completion stats
@@ -1057,6 +1093,30 @@ class State:
                     sites_dir, f"{safe_site}_exit_codes.json"), {
                     "updated": self.updated,
                     "requests": reqs,
+                })
+
+            # Per-site completion histograms
+            site_hists = {}
+            for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
+                for site, buckets in site_data.items():
+                    for ts, codes in buckets.items():
+                        h = (site_hists.setdefault(site, {})
+                             .setdefault(ts, {"success": 0, "failure": 0}))
+                        for code, cnt in codes.items():
+                            if code == "0":
+                                h["success"] += cnt
+                            else:
+                                h["failure"] += cnt
+            for site, hist in site_hists.items():
+                safe_site = site.replace("/", "_")
+                hist_ts = sorted(hist.keys())
+                _atomic_json(os.path.join(
+                    sites_dir, f"{safe_site}_histogram.json"), {
+                    "updated": self.updated,
+                    "bucket_size": EXIT_CODE_BUCKET,
+                    "timestamps": hist_ts,
+                    "success": [hist[t]["success"] for t in hist_ts],
+                    "failure": [hist[t]["failure"] for t in hist_ts],
                 })
 
     def flush_exit_code_state(self, cfg):

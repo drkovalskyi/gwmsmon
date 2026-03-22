@@ -26,13 +26,77 @@
     <div class="stat-label">Unique Pressure</div>
   </div>
   {% endif %}
+  {% set w1h = site_completion.get('1h', {}) %}
+  {% if w1h.get('total', 0) > 0 %}
+  <div class="stat">
+    <div class="stat-value">{{ w1h.total|fmt }}</div>
+    <div class="stat-label">Completed (1h)</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value {% if w1h.failure_rate > 0.05 %}warn{% endif %}">
+      {{ (w1h.failure_rate * 100)|round(1) }}%
+    </div>
+    <div class="stat-label">Failed (1h)</div>
+  </div>
+  {% endif %}
 </div>
 
 <div class="graphs-row">
   <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="hourly"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="daily"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="weekly"></div>
+  <div class="chart" data-src="/{{ view }}/json/_sites/{{ name|replace('/', '_') }}_histogram.json" data-chart-type="histogram"></div>
 </div>
+
+{% set any_completions = site_completion.get('1h', {}).get('total', 0) > 0 or site_completion.get('24h', {}).get('total', 0) > 0 or site_completion.get('7d', {}).get('total', 0) > 0 %}
+{% if any_completions %}
+<details class="section" open data-section="{{ view }}_site_completion">
+  <summary><h2>Completion Summary</h2></summary>
+  <table class="data-table compact">
+    <thead><tr>
+      <th>Window</th>
+      <th data-sort="num">Completed</th>
+      <th data-sort="num">Failed</th>
+      <th data-sort="num">Failure Rate</th>
+    </tr></thead>
+    <tbody>
+    {% for wlabel in ['1h', '24h', '7d'] %}
+    {% set w = site_completion.get(wlabel, {}) %}
+    {% if w.get('total', 0) > 0 %}
+    <tr>
+      <td>{{ wlabel }}</td>
+      <td>{{ w.total|fmt }}</td>
+      <td>{{ w.failures|fmt }}</td>
+      <td class="{% if w.failure_rate > 0.05 %}warn{% endif %}">{{ (w.failure_rate * 100)|round(1) }}%</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {% if site_exit_codes.get('annotated') %}
+  <h3 style="margin:12px 0 6px;font-size:13px;color:var(--text-th)">Exit Codes (last hour)</h3>
+  <table class="data-table compact sortable" data-sort-default="2:desc">
+    <thead><tr>
+      <th data-sort="num">Exit Code</th>
+      <th>Description</th>
+      <th data-sort="num">Count</th>
+    </tr></thead>
+    <tbody>
+    {% for entry in site_exit_codes.annotated %}
+    {% if entry.code != '0' %}
+    <tr>
+      <td><a href="/{{ view }}/exitcode/{{ entry.code }}">{{ entry.code }}</a></td>
+      <td>{{ entry.desc }}</td>
+      <td>{{ entry.count|fmt }}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</details>
+{% endif %}
 
 {% if requests %}
 <details class="section" open data-section="{{ view }}_site_requests">

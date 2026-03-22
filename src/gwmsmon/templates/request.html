@@ -67,6 +67,7 @@
   <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="hourly"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="daily"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="weekly"></div>
+  <div class="chart" data-src="/{{ view }}/json/{{ name }}/completion_histogram.json" data-chart-type="histogram"></div>
 </div>
 
 {% if prio_info and prio_info.get('blocks', {})|length > 1 %}

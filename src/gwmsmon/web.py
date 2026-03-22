@@ -477,6 +477,12 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             f"{safe_site}_exit_codes.json")
         site_req_ec = site_ec.get("requests", {})
 
+        # Per-site completion summary (windowed stats + exit codes)
+        all_site_ec = _load_json(basedir, "site_exit_codes.json")
+        site_completion = all_site_ec.get("sites", {}).get(name, {})
+        site_exit_codes = _annotate_exit_codes(
+            {"codes": site_completion.pop("codes", {})})
+
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
 
@@ -488,6 +494,8 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             site_data=sites[name],
             requests=sorted_requests,
             site_req_ec=site_req_ec,
+            site_completion=site_completion,
+            site_exit_codes=site_exit_codes,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,

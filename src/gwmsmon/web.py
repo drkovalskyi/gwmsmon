@@ -1,4 +1,4 @@
-"""Flask web application for gwmsmon2.
+"""Flask web application for gwmsmon.
 
 Serves pre-computed JSON data and renders HTML overview pages
 with Jinja2 templates. Graphs are generated on-demand with
@@ -115,7 +115,7 @@ def _annotate_exit_codes(exit_codes):
     return exit_codes
 
 
-def create_app(config_path="/etc/gwmsmon2.conf"):
+def create_app(config_path="/etc/gwmsmon.conf"):
     app = Flask(
         __name__,
         template_folder=os.path.join(os.path.dirname(__file__), "templates"),
@@ -764,9 +764,9 @@ def _subtask_total(subtasks, key):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="gwmsmon2 web application"
+        description="gwmsmon web application"
     )
-    parser.add_argument("--config", default="/etc/gwmsmon2.conf")
+    parser.add_argument("--config", default="/etc/gwmsmon.conf")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument("--debug", action="store_true")

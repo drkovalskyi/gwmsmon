@@ -1,6 +1,7 @@
 """Long-running collection process for HTCondor pool data."""
 
 import argparse
+import fcntl
 import gc
 import logging
 import os
@@ -33,7 +34,7 @@ def main():
         description="Collect HTCondor pool data for gwmsmon views"
     )
     parser.add_argument(
-        "--config", default="/etc/gwmsmon2.conf",
+        "--config", default="/etc/gwmsmon.conf",
         help="path to configuration file"
     )
     parser.add_argument(
@@ -53,6 +54,15 @@ def main():
 
     # Ensure files are world-readable for Apache
     os.umask(0o022)
+
+    # Exclusive lock to prevent concurrent instances
+    lockfile = "/var/lib/gwmsmon/.collector.lock"
+    lock_fd = open(lockfile, "w")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log.error("another collector instance is running (lock: %s)", lockfile)
+        sys.exit(1)
 
     cfg = config.load(args.config)
     state = State()

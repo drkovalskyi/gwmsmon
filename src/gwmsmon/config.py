@@ -1,13 +1,10 @@
-"""Configuration loader for gwmsmon2."""
+"""Configuration loader for gwmsmon."""
 
 import configparser
 import os
 
 DEFAULTS = {
-    "htcondor": {
-        "pool": "cmsgwms-collector-global.fnal.gov:9620",
-        "negotiator_collectors": "vocms0824.cern.ch,vocms4100.cern.ch",
-    },
+    "htcondor": {},
     "prodview": {
         "basedir": "/var/www/prodview",
     },
@@ -22,7 +19,6 @@ DEFAULTS = {
     },
     "factoryview": {
         "basedir": "/var/www/factoryview",
-        "factory_urls": "FNAL=http://cmssi-factory01.fnal.gov:8319/factory/monitor/,CERN=http://vocms0206.cern.ch/monitor/",
         "fetch_timeout": "30",
     },
     "utilization": {
@@ -30,8 +26,13 @@ DEFAULTS = {
     },
 }
 
+# Required keys that must be provided by the config file
+REQUIRED = {
+    "htcondor": ["pool"],
+}
 
-def load(path="/etc/gwmsmon2.conf"):
+
+def load(path="/etc/gwmsmon.conf"):
     """Load configuration from INI file.
 
     Falls back to defaults for any missing section or key.
@@ -49,5 +50,16 @@ def load(path="/etc/gwmsmon2.conf"):
     # Override with file if it exists
     if os.path.exists(path):
         cp.read(path)
+
+    # Validate required keys
+    missing = []
+    for section, keys in REQUIRED.items():
+        for key in keys:
+            if not cp.has_option(section, key) or not cp.get(section, key):
+                missing.append(f"[{section}] {key}")
+    if missing:
+        import logging
+        logging.getLogger(__name__).warning(
+            "config missing required keys: %s", ", ".join(missing))
 
     return cp

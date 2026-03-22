@@ -1,4 +1,4 @@
-# gwmsmon2 — Development Plan
+# gwmsmon — Development Plan
 
 ## Principles
 
@@ -14,7 +14,7 @@
 Create package structure and build config. No application logic.
 
 ```
-gwmsmon2/
+gwmsmon/
 ├── pyproject.toml
 ├── src/
 │   └── gwmsmon/
@@ -31,7 +31,7 @@ Verify: `pip install -e .` works on vocms860 as gwmsmon user.
 
 `src/gwmsmon/config.py`
 
-- Load INI from `/etc/gwmsmon2.conf` (or path argument)
+- Load INI from `/etc/gwmsmon.conf` (or path argument)
 - Sections: htcondor, prodview, analysisview, globalview, poolview,
   factoryview, utilization
 - Sensible defaults
@@ -406,7 +406,7 @@ loads, freshness shows correct age. Verify authentication works.
 - systemd unit files for collector and web app (run as gwmsmon)
 - Apache reverse proxy to Flask
 - CERN SSO (OpenID Connect) integration with Apache
-- Config file at `/etc/gwmsmon2.conf`
+- Config file at `/etc/gwmsmon.conf`
 - Data directories owned by gwmsmon
 
 ---

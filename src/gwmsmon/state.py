@@ -8,25 +8,31 @@ appends to time-series for active entities.
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 
 log = logging.getLogger(__name__)
 
-# Map negotiator Name prefix → site tier label (mirrors query.py)
-_NEGOTIATOR_TIERS = {
-    "vocms0824": "CERN",
-    "NEGOTIATORT1": "T1",
-    "NEGOTIATORUS": "US_T2",
-}
+# Safe pattern for workflow/request/site names used in filesystem paths
+_SAFE_NAME_RE = re.compile(r'^[a-zA-Z0-9._:@#-]+(/[a-zA-Z0-9._:@#-]+)*$')
 
 
+def _safe_name(name):
+    """Return name if safe for use in filesystem paths, else None."""
+    if not name or not _SAFE_NAME_RE.match(name):
+        return None
+    # Reject path traversal via ".." components
+    if any(part == ".." for part in name.split("/")):
+        return None
+    return name
+
+
+# Import negotiator tier mapping from query module to avoid duplication
 def _negotiator_tier(neg_name):
     """Map a NegotiatorName to a site tier label."""
-    for prefix, tier in _NEGOTIATOR_TIERS.items():
-        if neg_name.startswith(prefix):
-            return tier
-    return "nonUS_T2_T3"
+    from gwmsmon.query import negotiator_tier
+    return negotiator_tier(neg_name)
 
 # Retention: full resolution for 3.5 days, hourly for 365 days
 FULL_RES_SECONDS = int(3.5 * 86400)  # 302400
@@ -885,6 +891,8 @@ class State:
 
             # Per-workflow exit code files
             for wf, codes in flat.items():
+                if not _safe_name(wf):
+                    continue
                 wf_total = sum(codes.values())
                 wf_failures = sum(v for k, v in codes.items() if k != "0")
                 wf_dir = os.path.join(basedir, wf.replace("/", os.sep))
@@ -1478,6 +1486,8 @@ class State:
                          else view_data.get("users", {}))
             site_index = {}  # site → {req: counts}
             for req, subtasks in wf_source.items():
+                if not _safe_name(req):
+                    continue
                 req_dir = os.path.join(basedir, req.replace("/", os.sep))
                 os.makedirs(req_dir, exist_ok=True)
                 req_sites = {}

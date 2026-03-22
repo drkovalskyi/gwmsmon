@@ -363,7 +363,9 @@ def _fetch_xml(url, timeout=30):
     Note: xml.etree.ElementTree does not expand external entities,
     so it is safe against XXE by default (unlike lxml).
     """
-    resp = urlopen(url, timeout=timeout)
+    import ssl
+    ctx = ssl.create_default_context() if url.startswith("https") else None
+    resp = urlopen(url, timeout=timeout, context=ctx)
     return ElementTree.parse(resp)
 
 

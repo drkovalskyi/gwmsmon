@@ -1,0 +1,28 @@
+[Unit]
+Description=gwmsmon web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gwmsmon
+Group=gwmsmon
+Environment=PYTHONPATH=/opt/gwmsmon/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m gwmsmon.web --host 127.0.0.1 --port 5000
+WorkingDirectory=/var/lib/gwmsmon
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gwmsmon-web
+PrivateTmp=yes
+ProtectHome=yes
+NoNewPrivileges=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

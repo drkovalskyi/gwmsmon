@@ -1,4 +1,4 @@
-"""Matplotlib graph rendering for gwmsmon2.
+"""Matplotlib graph rendering for gwmsmon.
 
 Generates PNG graphs from pre-computed time-series JSON files.
 All rendering uses the Agg backend (non-interactive, no GUI).

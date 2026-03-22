@@ -1,8 +1,8 @@
-# gwmsmon2 — Design Specification
+# gwmsmon — Design Specification
 
 ## 1. Purpose
 
-gwmsmon2 monitors the CMS global HTCondor pool — the distributed computing
+gwmsmon monitors the CMS global HTCondor pool — the distributed computing
 infrastructure that runs CMS production and analysis workloads.
 
 ### Users
@@ -590,7 +590,7 @@ JavaScript is glue, not architecture.
 
 ## 8. Configuration
 
-INI format (`/etc/gwmsmon2.conf`):
+INI format (`/etc/gwmsmon.conf`):
 
 ```ini
 [prodview]
@@ -701,7 +701,7 @@ Background:
 
 ## Appendix A: Migration from gwmsmon
 
-| gwmsmon                | gwmsmon2              | Change                          |
+| gwmsmon                | gwmsmon              | Change                          |
 |------------------------|-----------------------|---------------------------------|
 | analysisview           | analysisview          | Kept separate (CRAB is a CMS production service) |
 | cmsconnectview         | globalview            | Absorbed into globalview        |

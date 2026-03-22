@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy gwmsmon2 to vocms860.cern.ch
+# Deploy gwmsmon to vocms860.cern.ch
 #
 # Usage: ./deploy.sh [--restart]
 #   --restart   restart collector and web after sync (default: sync only)
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 HOST="gwmsmon@vocms860.cern.ch"
-REMOTE_BASE="/opt/gwmsmon2"
+REMOTE_BASE="/opt/gwmsmon"
 REMOTE_SRC="$REMOTE_BASE/src/gwmsmon"
 LOCAL_SRC="$(dirname "$0")/src/gwmsmon"
 LOCAL_SYSTEMD="$(dirname "$0")/systemd"

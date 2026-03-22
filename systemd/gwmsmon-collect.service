@@ -1,0 +1,31 @@
+[Unit]
+Description=gwmsmon HTCondor pool data collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gwmsmon
+Group=gwmsmon
+Environment=PYTHONPATH=/opt/gwmsmon/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m gwmsmon.collector --verbose
+WorkingDirectory=/var/lib/gwmsmon
+Restart=on-failure
+RestartSec=30
+UMask=0022
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gwmsmon-collect
+MemoryMax=20G
+TasksMax=128
+PrivateTmp=yes
+ProtectHome=yes
+NoNewPrivileges=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

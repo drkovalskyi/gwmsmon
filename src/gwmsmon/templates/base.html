@@ -4,12 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}gwmsmon{% endblock %}</title>
-<script>
-(function(){
-  var m = document.cookie.match(/(?:^|;\s*)theme=(\w+)/);
-  if (m && m[1] === 'dark') document.documentElement.dataset.theme = 'dark';
-})();
-</script>
+<script src="{{ url_for('static', filename='theme.js') }}"></script>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js" integrity="sha384-XMP23k7YSCFr13Xrkxh4IO0v1W+8fB6AP+3Vycxphp2Z0V2vocAZHyuGaFCysrtM" crossorigin="anonymous"></script>
@@ -20,7 +15,7 @@
   {% for v, vc in views.items() %}
   <a href="/{{ v }}/" class="{% if v == view %}active{% endif %}">{{ vc.title }}</a>
   {% endfor %}
-  <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">&#9789;</button>
+  <button class="theme-toggle" id="theme-toggle-btn" title="Toggle dark mode">&#9789;</button>
   <span class="freshness" data-updated="{{ updated_ts }}">{{ freshness }}</span>
 </nav>
 <main>

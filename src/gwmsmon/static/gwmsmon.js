@@ -10,6 +10,8 @@ function toggleTheme() {
   }
   location.reload();
 }
+var _tb = document.getElementById('theme-toggle-btn');
+if (_tb) _tb.addEventListener('click', toggleTheme);
 
 // Details collapse state cookies (one per data-section key)
 (function() {

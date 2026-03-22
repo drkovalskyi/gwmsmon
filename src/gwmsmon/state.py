@@ -1027,6 +1027,38 @@ class State:
                 "sites": view_site_ec,
             })
 
+            # Per-site per-request completion stats
+            site_req_ec = {}
+            for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
+                for site, buckets in site_data.items():
+                    for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                        cutoff = now_site - wsec
+                        total = failures = 0
+                        for ts, codes in buckets.items():
+                            if ts < cutoff:
+                                continue
+                            for code, cnt in codes.items():
+                                total += cnt
+                                if code != "0":
+                                    failures += cnt
+                        if total:
+                            rw = (site_req_ec.setdefault(site, {})
+                                  .setdefault(wf, {}))
+                            rw[wlabel] = {
+                                "total": total,
+                                "failures": failures,
+                                "failure_rate": round(failures / total, 4),
+                            }
+            sites_dir = os.path.join(basedir, "_sites")
+            os.makedirs(sites_dir, exist_ok=True)
+            for site, reqs in site_req_ec.items():
+                safe_site = site.replace("/", "_")
+                _atomic_json(os.path.join(
+                    sites_dir, f"{safe_site}_exit_codes.json"), {
+                    "updated": self.updated,
+                    "requests": reqs,
+                })
+
     def flush_exit_code_state(self, cfg):
         """Persist exit code buckets and watermarks for restart recovery."""
         basedir = cfg.get("globalview", "basedir")

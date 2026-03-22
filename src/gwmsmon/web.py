@@ -472,6 +472,11 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             key=lambda x: -x[1].get("CpusInUse", 0),
         )
 
+        site_ec = _load_json(
+            os.path.join(basedir, "_sites"),
+            f"{safe_site}_exit_codes.json")
+        site_req_ec = site_ec.get("requests", {})
+
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
 
@@ -482,6 +487,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             name=name,
             site_data=sites[name],
             requests=sorted_requests,
+            site_req_ec=site_req_ec,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,

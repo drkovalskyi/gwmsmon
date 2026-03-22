@@ -46,15 +46,22 @@
       <th data-sort="num">Idle</th>
       <th data-sort="num">CPUs Use</th>
       <th data-sort="num">CPUs Pend</th>
+      <th data-sort="num">Done (1h)</th>
+      <th data-sort="num">Fail (1h)</th>
+      <th data-sort="num">Fail %</th>
     </tr></thead>
     <tbody>
     {% for req_name, data in requests %}
+    {% set sec = site_req_ec.get(req_name, {}).get('1h', {}) %}
     <tr>
       <td><a href="/{{ view }}/request/{{ req_name }}">{{ req_name }}</a></td>
       <td>{{ data.get('Running', 0)|fmt }}</td>
       <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>
       <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
       <td>{{ data.get('CpusPending', 0)|fmt }}</td>
+      <td>{{ sec.get('total', 0)|fmt }}</td>
+      <td>{{ sec.get('failures', 0)|fmt }}</td>
+      <td class="{% if sec.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.failure_rate * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     </tbody>

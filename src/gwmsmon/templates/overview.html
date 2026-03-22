@@ -198,10 +198,14 @@
         <th data-sort="num">CPUs Use</th>
         <th data-sort="num">CPUs Pend</th>
         <th data-sort="num">Uniq Pressure</th>
+        <th data-sort="num">Done (1h)</th>
+        <th data-sort="num">Fail (1h)</th>
+        <th data-sort="num">Fail %</th>
       </tr>
     </thead>
     <tbody>
     {% for name, data in sites %}
+    {% set sec = site_exit_codes.get(name, {}).get('1h', {}) %}
     <tr data-name="{{ name }}">
       <td><a href="/{{ view }}/site/{{ name }}">{{ name }}</a></td>
       <td>{{ data.get('Running', 0)|fmt }}</td>
@@ -209,6 +213,9 @@
       <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
       <td>{{ data.get('CpusPending', 0)|fmt }}</td>
       <td>{{ data.get('UniquePressure', 0)|fmt }}</td>
+      <td>{{ sec.get('total', 0)|fmt }}</td>
+      <td>{{ sec.get('failures', 0)|fmt }}</td>
+      <td class="{% if sec.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.failure_rate * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     </tbody>

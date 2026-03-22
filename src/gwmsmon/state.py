@@ -96,6 +96,7 @@ class State:
         self.timeseries = {}
         self.updated = 0
         self.exit_codes = {}         # {view: {workflow: {minute_ts: {code: count}}}}
+        self.exit_codes_by_site = {} # {view: {workflow: {site: {minute_ts: {code: count}}}}}
         self.exit_code_detail = {}   # {view: {code: {workflow: count, site: count, ...}}}
         self.history_watermarks = {} # {schedd_name: timestamp}
 
@@ -661,6 +662,11 @@ class State:
                 bucket.setdefault(minute, {})
                 bucket[minute].setdefault(code_str, 0)
                 bucket[minute][code_str] += 1
+                site_bucket = _ensure(self.exit_codes_by_site,
+                                      "prodview", request, site)
+                site_bucket.setdefault(minute, {})
+                site_bucket[minute].setdefault(code_str, 0)
+                site_bucket[minute][code_str] += 1
                 self._add_exit_detail("prodview", code_str, minute,
                                       request, site, "cmst1")
 
@@ -677,6 +683,11 @@ class State:
                     bucket.setdefault(minute, {})
                     bucket[minute].setdefault(code_str, 0)
                     bucket[minute][code_str] += 1
+                    site_bucket = _ensure(self.exit_codes_by_site,
+                                          "analysisview", wf_key, site)
+                    site_bucket.setdefault(minute, {})
+                    site_bucket[minute].setdefault(code_str, 0)
+                    site_bucket[minute][code_str] += 1
                     self._add_exit_detail("analysisview", code_str, minute,
                                           wf_key, site, user)
 
@@ -709,6 +720,11 @@ class State:
             bucket.setdefault(minute, {})
             bucket[minute].setdefault(gv_code, 0)
             bucket[minute][gv_code] += 1
+            site_bucket = _ensure(self.exit_codes_by_site,
+                                  "globalview", gv_key, site)
+            site_bucket.setdefault(minute, {})
+            site_bucket[minute].setdefault(gv_code, 0)
+            site_bucket[minute][gv_code] += 1
             self._add_exit_detail("globalview", gv_code, minute,
                                   gv_key, site, owner)
 
@@ -755,6 +771,23 @@ class State:
                 for ts in dead:
                     del buckets[ts]
                 if not buckets:
+                    dead_wfs.append(wf)
+            for wf in dead_wfs:
+                del workflows[wf]
+        # Prune per-site exit code buckets
+        for view, workflows in self.exit_codes_by_site.items():
+            dead_wfs = []
+            for wf, sites in workflows.items():
+                dead_sites = []
+                for site, buckets in sites.items():
+                    dead = [ts for ts in buckets if ts < cutoff]
+                    for ts in dead:
+                        del buckets[ts]
+                    if not buckets:
+                        dead_sites.append(site)
+                for site in dead_sites:
+                    del sites[site]
+                if not sites:
                     dead_wfs.append(wf)
             for wf in dead_wfs:
                 del workflows[wf]
@@ -848,12 +881,37 @@ class State:
             total_jobs = w1h.get("total", 0)
             total_failures = w1h.get("failures", 0)
 
+            now_site = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
+
             # Per-workflow exit code files
             for wf, codes in flat.items():
                 wf_total = sum(codes.values())
                 wf_failures = sum(v for k, v in codes.items() if k != "0")
                 wf_dir = os.path.join(basedir, wf.replace("/", os.sep))
                 os.makedirs(wf_dir, exist_ok=True)
+                # Per-site completion stats for this workflow
+                site_data = self.exit_codes_by_site.get(view, {}).get(wf, {})
+                wf_sites_ec = {}
+                for site, buckets in site_data.items():
+                    site_windows = {}
+                    for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                        cutoff = now_site - wsec
+                        total = failures = 0
+                        for ts, scodes in buckets.items():
+                            if ts < cutoff:
+                                continue
+                            for code, cnt in scodes.items():
+                                total += cnt
+                                if code != "0":
+                                    failures += cnt
+                        if total:
+                            site_windows[wlabel] = {
+                                "total": total,
+                                "failures": failures,
+                                "failure_rate": round(failures / total, 4),
+                            }
+                    if site_windows:
+                        wf_sites_ec[site] = site_windows
                 _atomic_json(os.path.join(wf_dir, "exit_codes.json"), {
                     "updated": self.updated,
                     "codes": codes,
@@ -861,6 +919,7 @@ class State:
                     "failures": wf_failures,
                     "failure_rate": (round(wf_failures / wf_total, 4)
                                      if wf_total else 0),
+                    "sites": wf_sites_ec,
                 })
 
             # Per-workflow totals (all codes) for failure rate context
@@ -943,6 +1002,31 @@ class State:
                 "users": all_users,
             })
 
+            # View-level per-site completion stats (aggregated across all workflows)
+            view_site_ec = {}
+            for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
+                for site, buckets in site_data.items():
+                    for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                        cutoff = now_site - wsec
+                        for ts, codes in buckets.items():
+                            if ts < cutoff:
+                                continue
+                            sw = (view_site_ec.setdefault(site, {})
+                                  .setdefault(wlabel,
+                                              {"total": 0, "failures": 0}))
+                            for code, cnt in codes.items():
+                                sw["total"] += cnt
+                                if code != "0":
+                                    sw["failures"] += cnt
+            for site, site_wins in view_site_ec.items():
+                for w in site_wins.values():
+                    w["failure_rate"] = (round(w["failures"] / w["total"], 4)
+                                         if w["total"] else 0)
+            _atomic_json(os.path.join(basedir, "site_exit_codes.json"), {
+                "updated": self.updated,
+                "sites": view_site_ec,
+            })
+
     def flush_exit_code_state(self, cfg):
         """Persist exit code buckets and watermarks for restart recovery."""
         basedir = cfg.get("globalview", "basedir")
@@ -965,6 +1049,19 @@ class State:
                     for code, buckets in codes.items()
                 }
                 for view, codes in self.exit_code_detail.items()
+            },
+            "exit_codes_by_site": {
+                view: {
+                    wf: {
+                        site: {
+                            str(ts): codes
+                            for ts, codes in buckets.items()
+                        }
+                        for site, buckets in sites.items()
+                    }
+                    for wf, sites in workflows.items()
+                }
+                for view, workflows in self.exit_codes_by_site.items()
             },
         })
 
@@ -1012,6 +1109,24 @@ class State:
                                 dest[dim][k] += n
                     self.exit_code_detail[view][code] = merged
             self._prune_exit_detail_window()
+
+            # Restore exit_codes_by_site
+            raw_by_site = data.get("exit_codes_by_site", {})
+            for view, workflows in raw_by_site.items():
+                self.exit_codes_by_site[view] = {}
+                for wf, sites in workflows.items():
+                    self.exit_codes_by_site[view][wf] = {}
+                    for site, buckets in sites.items():
+                        merged = {}
+                        for ts, codes in buckets.items():
+                            aligned = int(ts) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
+                            if aligned not in merged:
+                                merged[aligned] = {}
+                            for code, count in codes.items():
+                                merged[aligned].setdefault(code, 0)
+                                merged[aligned][code] += count
+                        if merged:
+                            self.exit_codes_by_site[view][wf][site] = merged
 
             total_wf = sum(len(wfs) for wfs in self.exit_codes.values())
             log.info("restored exit code state: %d watermarks, %d workflows",

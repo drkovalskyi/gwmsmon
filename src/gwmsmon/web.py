@@ -166,6 +166,8 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         site_summary = _load_json(basedir, "site_summary.json")
         exit_codes = _annotate_exit_codes(
             _load_json(basedir, "exit_codes.json"))
+        site_exit_codes = _load_json(basedir,
+                                     "site_exit_codes.json").get("sites", {})
 
         # Sort workflows by running desc, then idle desc
         workflows = totals_data.get("workflows", {})
@@ -250,6 +252,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             workflows=sorted_wf,
             sites=sorted_sites,
             exit_codes=exit_codes,
+            site_exit_codes=site_exit_codes,
             schedds=summary.get("schedds", {}),
             priorities=priorities,
             fairshare=fairshare,
@@ -345,6 +348,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
         req_dir = _safe_path(basedir, name.replace("/", os.sep))
         exit_codes = _annotate_exit_codes(
             _load_json(req_dir, "exit_codes.json"))
+        site_exit_codes = exit_codes.get("sites", {}) if exit_codes else {}
         detail = _load_json(req_dir, "detail.json")
 
         summary = _load_json(basedir, "summary.json")
@@ -379,6 +383,7 @@ def create_app(config_path="/etc/gwmsmon2.conf"):
             prio_info=prio_info,
             metadata=metadata,
             exit_codes=exit_codes,
+            site_exit_codes=site_exit_codes,
             sites=sorted_sites,
             updated=updated,
             freshness=_freshness(updated),

@@ -89,6 +89,11 @@
 
 {% set wins = exit_codes.get('windows', {}) if exit_codes else {} %}
 {% set any_completions = wins.get('1h', {}).get('total', 0) > 0 or wins.get('24h', {}).get('total', 0) > 0 or wins.get('7d', {}).get('total', 0) > 0 %}
+{% if not any_completions and exit_codes and exit_codes.get('total', 0) > 0 %}
+{# Fallback for old data without windows #}
+{% set any_completions = true %}
+{% set wins = {'7d': {'total': exit_codes.total, 'failures': exit_codes.get('failures', 0), 'failure_rate': exit_codes.get('failure_rate', 0)}} %}
+{% endif %}
 {% if any_completions %}
 <details class="section" open data-section="{{ view }}_req_exitcodes">
   <summary><h2>Completion Summary</h2></summary>

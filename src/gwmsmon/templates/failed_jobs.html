@@ -14,7 +14,7 @@
       <th>Description</th>
       <th>Task</th>
       <th>Schedd</th>
-      <th>Job ID</th>
+      <th>WMAgent Job</th>
       <th>Log</th>
     </tr></thead>
     <tbody>
@@ -24,7 +24,7 @@
       <td>{{ job.desc }}</td>
       <td>{{ job.task.rsplit('/', 1)[-1] if job.task else '' }}</td>
       <td>{{ job.schedd }}</td>
-      <td>{{ job.cluster }}.{{ job.proc }}</td>
+      <td>{{ job.jobid }}</td>
       <td><a href="{{ job.log_url }}" target="_blank" rel="noopener">tar.gz</a></td>
     </tr>
     {% endfor %}

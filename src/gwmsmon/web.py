@@ -527,15 +527,14 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         # Build log URLs
         for job in jobs:
             task = job.get("task", "")
-            # Extract short task name from full path
             # WMAgent_SubTaskName format: /request/TaskName
             task_short = task.rsplit("/", 1)[-1] if task else ""
-            schedd = job.get("schedd", "").replace(":", "-")
-            cluster = job.get("cluster", 0)
-            proc = job.get("proc", 0)
+            schedd = job.get("schedd", "")
+            jobid = job.get("jobid", 0)
+            retry = job.get("retry", 0)
             job["log_url"] = (
                 f"{EOS_LOG_BASE}/{request}/{task_short}/"
-                f"{schedd}-{cluster}-{proc}-log.tar.gz"
+                f"{schedd}-{jobid}-{retry}-log.tar.gz"
             )
             job["desc"] = _describe_exit_code(str(job.get("code", "")))
 

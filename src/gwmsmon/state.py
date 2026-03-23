@@ -677,17 +677,18 @@ class State:
                 self._add_exit_detail("prodview", code_str, minute,
                                       request, site, "cmst1")
                 # Track failed job records for log links
-                if code_str != "0":
+                if code_str != "0" and job.get("WMAgent_JobID"):
                     rec_list = (_ensure(self.failed_job_records,
                                         "prodview", site)
                                 .setdefault(request, []))
                     if len(rec_list) < 200:
+                        starts = job.get("NumJobStarts", 1)
                         rec_list.append({
                             "code": code_str,
                             "task": job.get("WMAgent_SubTaskName", ""),
                             "schedd": schedd_name,
-                            "cluster": job.get("ClusterId", 0),
-                            "proc": job.get("ProcId", 0),
+                            "jobid": job["WMAgent_JobID"],
+                            "retry": max(0, starts - 1),
                             "ts": int(completion),
                         })
 

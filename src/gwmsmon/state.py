@@ -920,13 +920,33 @@ class State:
                             }
                     if site_windows:
                         wf_sites_ec[site] = site_windows
+                # Per-request windowed stats
+                wf_buckets = self.exit_codes.get(view, {}).get(wf, {})
+                wf_windows = {}
+                for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                    cutoff = now_site - wsec
+                    wcodes = {}
+                    for ts, tcodes in wf_buckets.items():
+                        if ts < cutoff:
+                            continue
+                        for code, cnt in tcodes.items():
+                            wcodes[code] = wcodes.get(code, 0) + cnt
+                    wtotal = sum(wcodes.values())
+                    wfail = sum(v for k, v in wcodes.items() if k != "0")
+                    wf_windows[wlabel] = {
+                        "total": wtotal, "failures": wfail,
+                        "failure_rate": (round(wfail / wtotal, 4)
+                                         if wtotal else 0),
+                        "codes": wcodes,
+                    }
+                w1h = wf_windows.get("1h", {})
                 _atomic_json(os.path.join(wf_dir, "exit_codes.json"), {
                     "updated": self.updated,
-                    "codes": codes,
-                    "total": wf_total,
-                    "failures": wf_failures,
-                    "failure_rate": (round(wf_failures / wf_total, 4)
-                                     if wf_total else 0),
+                    "codes": w1h.get("codes", {}),
+                    "total": w1h.get("total", 0),
+                    "failures": w1h.get("failures", 0),
+                    "failure_rate": w1h.get("failure_rate", 0),
+                    "windows": wf_windows,
                     "sites": wf_sites_ec,
                 })
                 # Per-request completion histogram

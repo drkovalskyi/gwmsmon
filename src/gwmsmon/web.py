@@ -486,6 +486,12 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         site_exit_codes = _annotate_exit_codes(
             {"codes": site_completion.pop("codes", {})})
 
+        # Failed job records (for linking Fail count)
+        failed_jobs_data = _load_json(
+            os.path.join(basedir, "_sites"),
+            f"{safe_site}_failed_jobs.json")
+        failed_requests = set(failed_jobs_data.get("requests", {}).keys())
+
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
 
@@ -499,6 +505,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             site_req_ec=site_req_ec,
             site_completion=site_completion,
             site_exit_codes=site_exit_codes,
+            failed_requests=failed_requests,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,

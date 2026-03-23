@@ -115,13 +115,12 @@
   <summary><h2>{{ view_cfg.entity_label }}s ({{ workflows|length }})</h2></summary>
   <input type="text" class="table-filter" placeholder="Filter..." data-table="wf-table">
   <div class="table-scroll">
-  <table class="data-table sortable" id="wf-table" data-sort-default="{% if view == 'prodview' %}5{% elif view == 'globalview' %}4{% else %}3{% endif %}:desc">
+  <table class="data-table sortable" id="wf-table" data-sort-default="{% if view == 'prodview' %}4{% elif view == 'globalview' %}4{% else %}3{% endif %}:desc">
     <thead>
       <tr>
         <th>{{ view_cfg.entity_label }}</th>
         {% if view == 'prodview' %}
         <th data-sort="num">Prio</th>
-        <th>Block</th>
         {% elif view == 'globalview' %}
         <th>Group</th>
         {% endif %}
@@ -129,6 +128,11 @@
         <th data-sort="num">Idle</th>
         <th data-sort="num">CPUs Use</th>
         <th data-sort="num">CPUs Pend</th>
+        {% if view == 'prodview' %}
+        <th data-sort="num">Done (1h)</th>
+        <th data-sort="num">Fail (1h)</th>
+        <th data-sort="num">Fail %</th>
+        {% endif %}
       </tr>
     </thead>
     <tbody>
@@ -169,14 +173,17 @@
       {% set cpus_use.v = cpus_use.v + st_data.get('CpusInUse', 0) %}
       {% set cpus_pend.v = cpus_pend.v + st_data.get('CpusPending', 0) %}
     {% endfor %}
+    {% set wfc = wf_completion.get(name, {}) %}
     <tr data-name="{{ name }}" data-running="{{ running.v }}" data-idle="{{ idle.v }}" data-cpus-use="{{ cpus_use.v }}" data-cpus-pend="{{ cpus_pend.v }}">
       <td><a href="/{{ view }}/request/{{ name }}">{{ name }}</a></td>
       <td>{{ prio_info.get('prio', '')|fmt if prio_info else '' }}</td>
-      <td>{{ prio_info.get('block', '') }}</td>
       <td>{{ running.v|fmt }}</td>
       <td>{{ idle.v|fmt }}</td>
       <td>{{ cpus_use.v|fmt }}</td>
       <td>{{ cpus_pend.v|fmt }}</td>
+      <td>{{ wfc.get('total', 0)|fmt }}</td>
+      <td>{{ wfc.get('failures', 0)|fmt }}</td>
+      <td class="{% if wfc.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.failure_rate * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     {% endif %}

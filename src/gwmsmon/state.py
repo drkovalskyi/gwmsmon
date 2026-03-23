@@ -890,6 +890,7 @@ class State:
             now_site = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
 
             # Per-workflow exit code files
+            wf_completion = {}  # {wf: {total, failures, failure_rate}} for 1h
             for wf, codes in flat.items():
                 if not _safe_name(wf):
                     continue
@@ -940,6 +941,12 @@ class State:
                         "codes": wcodes,
                     }
                 w1h = wf_windows.get("1h", {})
+                if w1h.get("total", 0):
+                    wf_completion[wf] = {
+                        "total": w1h["total"],
+                        "failures": w1h["failures"],
+                        "failure_rate": w1h["failure_rate"],
+                    }
                 _atomic_json(os.path.join(wf_dir, "exit_codes.json"), {
                     "updated": self.updated,
                     "codes": w1h.get("codes", {}),
@@ -969,6 +976,11 @@ class State:
                     "success": [wf_hist[t]["success"] for t in hist_ts],
                     "failure": [wf_hist[t]["failure"] for t in hist_ts],
                 })
+
+            _atomic_json(os.path.join(basedir, "wf_completion.json"), {
+                "updated": self.updated,
+                "workflows": wf_completion,
+            })
 
             # Per-workflow totals (all codes) for failure rate context
             wf_totals = {}  # {wf: total_completed}

@@ -168,6 +168,8 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             _load_json(basedir, "exit_codes.json"))
         site_exit_codes = _load_json(basedir,
                                      "site_exit_codes.json").get("sites", {})
+        wf_completion = _load_json(basedir,
+                                   "wf_completion.json").get("workflows", {})
 
         # Sort workflows by running desc, then idle desc
         workflows = totals_data.get("workflows", {})
@@ -253,6 +255,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             sites=sorted_sites,
             exit_codes=exit_codes,
             site_exit_codes=site_exit_codes,
+            wf_completion=wf_completion,
             schedds=summary.get("schedds", {}),
             priorities=priorities,
             fairshare=fairshare,

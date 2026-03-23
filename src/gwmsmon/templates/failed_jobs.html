@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Failed Jobs — {{ request_name }} @ {{ site_name }} — gwmsmon{% endblock %}
+{% block content %}
+<h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / <a href="/{{ view }}/site/{{ site_name }}">{{ site_name }}</a> / Failed Jobs</h1>
+<p>Request: <a href="/{{ view }}/request/{{ request_name }}">{{ request_name }}</a></p>
+
+{% if jobs %}
+<details class="section" open>
+  <summary><h2>Failed Jobs ({{ jobs|length }})</h2></summary>
+  <div class="table-scroll">
+  <table class="data-table sortable" data-sort-default="0:asc">
+    <thead><tr>
+      <th data-sort="num">Exit Code</th>
+      <th>Description</th>
+      <th>Task</th>
+      <th>Schedd</th>
+      <th>Job ID</th>
+      <th>Log</th>
+    </tr></thead>
+    <tbody>
+    {% for job in jobs %}
+    <tr>
+      <td><a href="/{{ view }}/exitcode/{{ job.code }}">{{ job.code }}</a></td>
+      <td>{{ job.desc }}</td>
+      <td>{{ job.task.rsplit('/', 1)[-1] if job.task else '' }}</td>
+      <td>{{ job.schedd }}</td>
+      <td>{{ job.cluster }}.{{ job.proc }}</td>
+      <td><a href="{{ job.log_url }}" target="_blank" rel="noopener">tar.gz</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% else %}
+<p>No failed jobs recorded in the last hour.</p>
+{% endif %}
+{% endblock %}

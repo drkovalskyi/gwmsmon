@@ -504,6 +504,48 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             updated_ts=updated,
         )
 
+    EOS_LOG_BASE = ("https://eoscms.cern.ch/eos/cms/store/logs/prod"
+                     "/recent/PRODUCTION")
+
+    @app.route("/<view>/site/<site_name>/failed/<path:request>")
+    def failed_jobs(view, site_name, request):
+        if view not in VIEWS or VIEWS[view].get("overview_only"):
+            abort(404)
+        basedir = cfg.get(view, "basedir")
+        safe_site = site_name.replace("/", "_")
+        data = _load_json(
+            os.path.join(basedir, "_sites"),
+            f"{safe_site}_failed_jobs.json")
+        jobs = data.get("requests", {}).get(request, [])
+        # Build log URLs
+        for job in jobs:
+            task = job.get("task", "")
+            # Extract short task name from full path
+            # WMAgent_SubTaskName format: /request/TaskName
+            task_short = task.rsplit("/", 1)[-1] if task else ""
+            schedd = job.get("schedd", "").replace(":", "-")
+            cluster = job.get("cluster", 0)
+            proc = job.get("proc", 0)
+            job["log_url"] = (
+                f"{EOS_LOG_BASE}/{request}/{task_short}/"
+                f"{schedd}-{cluster}-{proc}-log.tar.gz"
+            )
+            job["desc"] = _describe_exit_code(str(job.get("code", "")))
+
+        summary = _load_json(basedir, "summary.json")
+        updated = summary.get("updated", 0)
+        return render_template(
+            "failed_jobs.html",
+            view=view,
+            view_cfg=VIEWS[view],
+            site_name=site_name,
+            request_name=request,
+            jobs=jobs,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
+
     @app.route("/<view>/completed")
     def completed_overview(view):
         """All completed jobs — same as exitcode detail with no filter."""

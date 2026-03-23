@@ -124,7 +124,7 @@
       <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
       <td>{{ data.get('CpusPending', 0)|fmt }}</td>
       <td>{{ sec.get('total', 0)|fmt }}</td>
-      <td>{{ sec.get('failures', 0)|fmt }}</td>
+      <td>{% if sec.get('failures', 0) %}<a href="/{{ view }}/site/{{ name }}/failed/{{ req_name }}">{{ sec.failures|fmt }}</a>{% else %}0{% endif %}</td>
       <td class="{% if sec.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.failure_rate * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}

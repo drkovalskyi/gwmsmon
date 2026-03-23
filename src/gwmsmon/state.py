@@ -104,6 +104,7 @@ class State:
         self.exit_codes = {}         # {view: {workflow: {minute_ts: {code: count}}}}
         self.exit_codes_by_site = {} # {view: {workflow: {site: {minute_ts: {code: count}}}}}
         self.exit_code_detail = {}   # {view: {code: {workflow: count, site: count, ...}}}
+        self.failed_job_records = {} # {view: {site: {workflow: [record, ...]}}}
         self.history_watermarks = {} # {schedd_name: timestamp}
 
     def update(self, jobs, summary_ads, factory_data, accounting_ads=None):
@@ -675,6 +676,20 @@ class State:
                 site_bucket[minute][code_str] += 1
                 self._add_exit_detail("prodview", code_str, minute,
                                       request, site, "cmst1")
+                # Track failed job records for log links
+                if code_str != "0":
+                    rec_list = (_ensure(self.failed_job_records,
+                                        "prodview", site)
+                                .setdefault(request, []))
+                    if len(rec_list) < 200:
+                        rec_list.append({
+                            "code": code_str,
+                            "task": job.get("WMAgent_SubTaskName", ""),
+                            "schedd": schedd_name,
+                            "cluster": job.get("ClusterId", 0),
+                            "proc": job.get("ProcId", 0),
+                            "ts": int(completion),
+                        })
 
             # analysisview: jobs from crabschedd
             if schedd_type == "crabschedd":
@@ -797,6 +812,22 @@ class State:
                     dead_wfs.append(wf)
             for wf in dead_wfs:
                 del workflows[wf]
+        # Prune failed job records older than 1h
+        cutoff_1h = int(time.time()) - EXIT_CODE_WINDOWS["1h"]
+        for view, sites in self.failed_job_records.items():
+            dead_sites = []
+            for site, wfs in sites.items():
+                dead_wfs = []
+                for wf, records in wfs.items():
+                    wfs[wf] = [r for r in records if r["ts"] >= cutoff_1h]
+                    if not wfs[wf]:
+                        dead_wfs.append(wf)
+                for wf in dead_wfs:
+                    del wfs[wf]
+                if not wfs:
+                    dead_sites.append(site)
+            for site in dead_sites:
+                del sites[site]
 
     def _flatten_exit_codes(self, view):
         """Flatten minute buckets into total counts per workflow."""
@@ -1157,6 +1188,15 @@ class State:
                     "timestamps": hist_ts,
                     "success": [hist[t]["success"] for t in hist_ts],
                     "failure": [hist[t]["failure"] for t in hist_ts],
+                })
+
+            # Per-site failed job records
+            for site, wfs in self.failed_job_records.get(view, {}).items():
+                safe_site = site.replace("/", "_")
+                _atomic_json(os.path.join(
+                    sites_dir, f"{safe_site}_failed_jobs.json"), {
+                    "updated": self.updated,
+                    "requests": wfs,
                 })
 
     def flush_exit_code_state(self, cfg):

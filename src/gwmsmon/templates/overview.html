@@ -197,8 +197,8 @@
       <td>{{ wfc.get('total', 0)|fmt }}</td>
       <td>{{ wfc.get('failures', 0)|fmt }}</td>
       <td class="{% if wfc.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.failure_rate * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if wfc.get('running_eff', 0) and wfc.running_eff < 0.5 %}warn{% endif %}">{% if wfc.get('running_eff', 0) %}{{ (wfc.running_eff * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if wfc.get('processing_eff', 0) and wfc.processing_eff < 0.8 %}warn{% endif %}">{% if wfc.get('processing_eff', 0) %}{{ (wfc.processing_eff * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if wfc.get('lt_running_eff', 0) and wfc.lt_running_eff < 0.5 %}warn{% endif %}">{% if wfc.get('lt_running_eff', 0) %}{{ (wfc.lt_running_eff * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if wfc.get('lt_processing_eff', 0) and wfc.lt_processing_eff < 0.8 %}warn{% endif %}">{% if wfc.get('lt_processing_eff', 0) %}{{ (wfc.lt_processing_eff * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     {% endif %}
@@ -223,8 +223,8 @@
         <th data-sort="num">Done (1h)</th>
         <th data-sort="num">Fail (1h)</th>
         <th data-sort="num">Fail %</th>
-        <th data-sort="num">CPU Eff</th>
-        <th data-sort="num">Proc Eff</th>
+        <th data-sort="num">CPU Eff (1h)</th>
+        <th data-sort="num">Proc Eff (1h)</th>
       </tr>
     </thead>
     <tbody>

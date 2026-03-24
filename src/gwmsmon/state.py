@@ -1090,10 +1090,15 @@ class State:
                                 if code != "0":
                                     failures += cnt
                         if total:
+                            eff_b = self.efficiency_by_site.get(
+                                view, {}).get(wf, {}).get(site, {})
+                            eff = self._compute_efficiency(eff_b, cutoff)
                             site_windows[wlabel] = {
                                 "total": total,
                                 "failures": failures,
                                 "failure_rate": round(failures / total, 4),
+                                "running_eff": eff["running_eff"],
+                                "processing_eff": eff["processing_eff"],
                             }
                     if site_windows:
                         wf_sites_ec[site] = site_windows
@@ -1139,12 +1144,19 @@ class State:
                     }
                 if w1h.get("total", 0):
                     eff1h = wf_eff.get("1h", {})
+                    lt = self.efficiency_lifetime.get(wf)
                     wf_completion[wf] = {
                         "total": w1h["total"],
                         "failures": w1h["failures"],
                         "failure_rate": w1h["failure_rate"],
                         "running_eff": eff1h.get("running_eff", 0),
                         "processing_eff": eff1h.get("processing_eff", 0),
+                        "lt_running_eff": round(
+                            lt["cpu"] / lt["wall_cpus"], 4)
+                        if lt and lt.get("wall_cpus") else 0,
+                        "lt_processing_eff": round(
+                            lt["slot_ok"] / lt["slot_all"], 4)
+                        if lt and lt.get("slot_all") else 0,
                     }
                 _atomic_json(os.path.join(wf_dir, "exit_codes.json"), {
                     "updated": self.updated,
@@ -1352,7 +1364,7 @@ class State:
                                       "completion_cross_reference.json"),
                          completion_xref)
 
-            # Per-site per-request completion stats
+            # Per-site per-request completion stats + efficiency
             site_req_ec = {}
             for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
                 for site, buckets in site_data.items():
@@ -1369,10 +1381,16 @@ class State:
                         if total:
                             rw = (site_req_ec.setdefault(site, {})
                                   .setdefault(wf, {}))
+                            eff_b = self.efficiency_by_site.get(
+                                view, {}).get(wf, {}).get(site, {})
+                            eff = self._compute_efficiency(
+                                eff_b, cutoff)
                             rw[wlabel] = {
                                 "total": total,
                                 "failures": failures,
                                 "failure_rate": round(failures / total, 4),
+                                "running_eff": eff["running_eff"],
+                                "processing_eff": eff["processing_eff"],
                             }
             sites_dir = os.path.join(basedir, "_sites")
             os.makedirs(sites_dir, exist_ok=True)

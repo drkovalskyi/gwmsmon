@@ -1022,6 +1022,7 @@ class State:
                 }
 
             # View-level efficiency (all workflows combined)
+            now_bucket = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
             view_eff = {}
             for wlabel, wsec in EXIT_CODE_WINDOWS.items():
                 cutoff = now_bucket - wsec
@@ -1145,18 +1146,18 @@ class State:
                 if w1h.get("total", 0):
                     eff1h = wf_eff.get("1h", {})
                     lt = self.efficiency_lifetime.get(wf)
+                    lt_re = (round(lt["cpu"] / lt["wall_cpus"], 4)
+                             if lt and lt.get("wall_cpus") else 0)
+                    lt_pe = (round(lt["slot_ok"] / lt["slot_all"], 4)
+                             if lt and lt.get("slot_all") else 0)
                     wf_completion[wf] = {
                         "total": w1h["total"],
                         "failures": w1h["failures"],
                         "failure_rate": w1h["failure_rate"],
                         "running_eff": eff1h.get("running_eff", 0),
                         "processing_eff": eff1h.get("processing_eff", 0),
-                        "lt_running_eff": round(
-                            lt["cpu"] / lt["wall_cpus"], 4)
-                        if lt and lt.get("wall_cpus") else 0,
-                        "lt_processing_eff": round(
-                            lt["slot_ok"] / lt["slot_all"], 4)
-                        if lt and lt.get("slot_all") else 0,
+                        "lt_running_eff": lt_re,
+                        "lt_processing_eff": lt_pe,
                     }
                 _atomic_json(os.path.join(wf_dir, "exit_codes.json"), {
                     "updated": self.updated,

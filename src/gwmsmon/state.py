@@ -683,6 +683,10 @@ class State:
                                 .setdefault(request, []))
                     if len(rec_list) < 200:
                         starts = job.get("NumJobStarts", 1)
+                        # Extract short host from LastRemoteHost
+                        # Format: slot1_1@glidein_...@hostname.domain
+                        lrh = job.get("LastRemoteHost", "")
+                        host = lrh.rsplit("@", 1)[-1] if lrh else ""
                         rec_list.append({
                             "code": code_str,
                             "task": job.get("WMAgent_SubTaskName", ""),
@@ -690,6 +694,23 @@ class State:
                             "jobid": job["WMAgent_JobID"],
                             "retry": max(0, starts - 1),
                             "ts": int(completion),
+                            "wall": round(job.get(
+                                "RemoteWallClockTime", 0)),
+                            "rss_mb": round(job.get(
+                                "ResidentSetSize", 0) / 1024),
+                            "disk_mb": round(job.get(
+                                "DiskUsage", 0) / 1024),
+                            "req_mem": job.get("RequestMemory", 0),
+                            "req_disk_mb": round(job.get(
+                                "RequestDisk", 0) / 1024),
+                            "cpus": job.get("CpusProvisioned", 0),
+                            "host": host,
+                            "cmssw_time": round(job.get(
+                                "ChirpCMSSWElapsed", 0)),
+                            "cmssw_events": job.get(
+                                "ChirpCMSSWEvents", 0),
+                            "cmssw_done": bool(job.get(
+                                "ChirpCMSSWDone", False)),
                         })
 
             # analysisview: jobs from crabschedd

@@ -3,6 +3,7 @@
 {% block content %}
 <h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / <a href="/{{ view }}/site/{{ site_name }}">{{ site_name }}</a> / Failed Jobs</h1>
 <p>Request: <a href="/{{ view }}/request/{{ request_name }}">{{ request_name }}</a></p>
+<p style="color:var(--text-th);font-size:13px">Log tarballs require CERN SSO. Not all jobs have logs available on EOS.</p>
 
 {% if jobs %}
 <details class="section" open>
@@ -10,11 +11,18 @@
   <div class="table-scroll">
   <table class="data-table sortable" data-sort-default="0:asc">
     <thead><tr>
-      <th data-sort="num">Exit Code</th>
+      <th data-sort="num">Code</th>
       <th>Description</th>
+      <th>Worker Node</th>
+      <th data-sort="num">Wall (s)</th>
+      <th data-sort="num">RSS (MB)</th>
+      <th data-sort="num">Req Mem</th>
+      <th data-sort="num">Disk (MB)</th>
+      <th data-sort="num">CPUs</th>
+      <th data-sort="num">CMSSW Time</th>
+      <th data-sort="num">Events</th>
+      <th>CMSSW OK</th>
       <th>Task</th>
-      <th>Schedd</th>
-      <th>WMAgent Job</th>
       <th>Log</th>
     </tr></thead>
     <tbody>
@@ -22,9 +30,16 @@
     <tr>
       <td><a href="/{{ view }}/exitcode/{{ job.code }}">{{ job.code }}</a></td>
       <td>{{ job.desc }}</td>
-      <td>{{ job.task.rsplit('/', 1)[-1] if job.task else '' }}</td>
-      <td>{{ job.schedd }}</td>
-      <td>{{ job.jobid }}</td>
+      <td title="{{ job.host }}">{{ job.host }}</td>
+      <td>{{ job.wall|fmt }}</td>
+      <td class="{% if job.rss_mb and job.req_mem and job.rss_mb > job.req_mem * 0.9 %}warn{% endif %}">{{ job.rss_mb|fmt }}</td>
+      <td>{{ job.req_mem|fmt }}</td>
+      <td>{{ job.disk_mb|fmt }}</td>
+      <td>{{ job.cpus }}</td>
+      <td>{{ job.cmssw_time|fmt }}</td>
+      <td>{{ job.cmssw_events|fmt }}</td>
+      <td>{% if job.cmssw_done %}yes{% elif job.cmssw_time %}no{% endif %}</td>
+      <td title="{{ job.task }}">{{ job.task.rsplit('/', 1)[-1] if job.task else '' }}</td>
       <td><a href="{{ job.log_url }}" target="_blank" rel="noopener">tar.gz</a></td>
     </tr>
     {% endfor %}

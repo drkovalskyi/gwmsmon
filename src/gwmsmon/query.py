@@ -80,6 +80,17 @@ HISTORY_PROJECTION = [
     "Owner",
     "DAGManJobId",
     "SubmitFile",
+    # Diagnostics for failed job records
+    "RemoteWallClockTime",
+    "ResidentSetSize",
+    "DiskUsage",
+    "RequestMemory",
+    "RequestDisk",
+    "CpusProvisioned",
+    "LastRemoteHost",
+    "ChirpCMSSWElapsed",
+    "ChirpCMSSWEvents",
+    "ChirpCMSSWDone",
 ]
 
 

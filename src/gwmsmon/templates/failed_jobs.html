@@ -30,16 +30,16 @@
     <tr>
       <td><a href="/{{ view }}/exitcode/{{ job.code }}">{{ job.code }}</a></td>
       <td>{{ job.desc }}</td>
-      <td title="{{ job.host }}">{{ job.host }}</td>
-      <td>{{ job.wall|fmt }}</td>
-      <td class="{% if job.rss_mb and job.req_mem and job.rss_mb > job.req_mem * 0.9 %}warn{% endif %}">{{ job.rss_mb|fmt }}</td>
-      <td>{{ job.req_mem|fmt }}</td>
-      <td>{{ job.disk_mb|fmt }}</td>
-      <td>{{ job.cpus }}</td>
-      <td>{{ job.cmssw_time|fmt }}</td>
-      <td>{{ job.cmssw_events|fmt }}</td>
-      <td>{% if job.cmssw_done %}yes{% elif job.cmssw_time %}no{% endif %}</td>
-      <td title="{{ job.task }}">{{ job.task.rsplit('/', 1)[-1] if job.task else '' }}</td>
+      <td title="{{ job.get('host', '') }}">{{ job.get('host', '') }}</td>
+      <td>{{ job.get('wall', 0)|fmt }}</td>
+      <td class="{% if job.get('rss_mb', 0) and job.get('req_mem', 0) and job.rss_mb > job.req_mem * 0.9 %}warn{% endif %}">{{ job.get('rss_mb', 0)|fmt }}</td>
+      <td>{{ job.get('req_mem', 0)|fmt }}</td>
+      <td>{{ job.get('disk_mb', 0)|fmt }}</td>
+      <td>{{ job.get('cpus', 0) }}</td>
+      <td>{{ job.get('cmssw_time', 0)|fmt }}</td>
+      <td>{{ job.get('cmssw_events', 0)|fmt }}</td>
+      <td>{% if job.get('cmssw_done') %}yes{% elif job.get('cmssw_time', 0) %}no{% endif %}</td>
+      <td title="{{ job.get('task', '') }}">{{ job.get('task', '').rsplit('/', 1)[-1] }}</td>
       <td><a href="{{ job.log_url }}" target="_blank" rel="noopener">tar.gz</a></td>
     </tr>
     {% endfor %}

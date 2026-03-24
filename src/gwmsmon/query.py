@@ -80,7 +80,11 @@ HISTORY_PROJECTION = [
     "Owner",
     "DAGManJobId",
     "SubmitFile",
-    # Diagnostics for failed job records
+    # Diagnostics and efficiency metrics
+    "RemoteUserCpu",
+    "RemoteSysCpu",
+    "CommittedSlotTime",
+    "RequestCpus",
     "RemoteWallClockTime",
     "ResidentSetSize",
     "DiskUsage",

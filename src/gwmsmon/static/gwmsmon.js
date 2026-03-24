@@ -209,19 +209,19 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
     // 2. Filter workflow rows: text match AND site match
     var visibleWfs = new Set();
-    var totals = {running: 0, idle: 0, cpusUse: 0, cpusPend: 0, count: 0, done: 0, fail: 0};
+    var totals = {running: 0, idle: 0, cpusUse: 0, cpusPend: 0, count: 0, done: 0, fail: 0, cpu: 0, wallCpus: 0, slotOk: 0, slotAll: 0};
     wfTable.querySelectorAll('tbody tr').forEach(function(row) {
       var textMatch = !wfFilter || row.textContent.toLowerCase().indexOf(wfFilter) !== -1;
       var siteMatch = true;
       var name = row.dataset.name;
       var wfCounts = null; // [R, I, C, P] per-site contribution
-      var wfComp = null;   // [done, fail] per-site completion
+      var wfComp = null;   // [done, fail, cpu, wall_cpus, slot_ok, slot_all]
       if (matchingSites && crossRef) {
         var wfSites = name ? crossRef[name] : null;
         if (wfSites) {
           siteMatch = false;
           wfCounts = [0, 0, 0, 0];
-          wfComp = [0, 0];
+          wfComp = [0, 0, 0, 0, 0, 0];
           var cSites = completionXref && completionXref[name] ? completionXref[name] : {};
           for (var s in wfSites) {
             if (matchingSites.has(s)) {
@@ -229,7 +229,9 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
               var v = wfSites[s];
               wfCounts[0] += v[0]; wfCounts[1] += v[1];
               wfCounts[2] += v[2]; wfCounts[3] += v[3];
-              if (cSites[s]) { wfComp[0] += cSites[s][0]; wfComp[1] += cSites[s][1]; }
+              if (cSites[s]) {
+                for (var ci = 0; ci < 6; ci++) wfComp[ci] += cSites[s][ci] || 0;
+              }
             }
           }
         } else {
@@ -249,11 +251,11 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       // Update workflow row cells when site filter is active
       var cells = row.querySelectorAll('td');
       var n = cells.length;
-      // Detect if row has completion columns (prodview: 9 cells with Prio)
-      var hasComp = n >= 9 && row.dataset.done !== undefined;
+      // Detect if row has completion+efficiency columns (prodview: 11 cells with Prio)
+      var hasComp = row.dataset.done !== undefined;
       if (matchingSites && wfCounts) {
         if (hasComp) {
-          // prodview: Name Prio R I C P Done Fail Fail%
+          // prodview: Name Prio R I C P Done Fail Fail% CpuEff ProcEff
           cells[2].textContent = fmt(wfCounts[0]);
           cells[3].textContent = fmt(wfCounts[1]);
           cells[4].textContent = fmt(wfCounts[2]);
@@ -262,6 +264,10 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
           cells[7].textContent = fmt(wfComp[1]);
           cells[8].textContent = wfComp[0] ? (wfComp[1] / wfComp[0] * 100).toFixed(1) + '%' : '';
           cells[8].className = (wfComp[0] && wfComp[1] / wfComp[0] > 0.05) ? 'warn' : '';
+          var cpuEff = wfComp[3] ? wfComp[2] / wfComp[3] : 0;
+          var procEff = wfComp[5] ? wfComp[4] / wfComp[5] : 0;
+          if (cells[9]) { cells[9].textContent = wfComp[0] ? (cpuEff * 100).toFixed(1) + '%' : ''; cells[9].className = cpuEff && cpuEff < 0.5 ? 'warn' : ''; }
+          if (cells[10]) { cells[10].textContent = wfComp[0] ? (procEff * 100).toFixed(1) + '%' : ''; cells[10].className = procEff && procEff < 0.8 ? 'warn' : ''; }
         } else {
           cells[n - 4].textContent = fmt(wfCounts[0]);
           cells[n - 3].textContent = fmt(wfCounts[1]);
@@ -279,7 +285,11 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         if (wfCounts) {
           totals.running += wfCounts[0]; totals.idle += wfCounts[1];
           totals.cpusUse += wfCounts[2]; totals.cpusPend += wfCounts[3];
-          if (wfComp) { totals.done += wfComp[0]; totals.fail += wfComp[1]; }
+          if (wfComp) {
+            totals.done += wfComp[0]; totals.fail += wfComp[1];
+            totals.cpu += wfComp[2]; totals.wallCpus += wfComp[3];
+            totals.slotOk += wfComp[4]; totals.slotAll += wfComp[5];
+          }
         } else {
           totals.running += parseInt(row.dataset.running) || 0;
           totals.idle += parseInt(row.dataset.idle) || 0;
@@ -287,6 +297,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
           totals.cpusPend += parseInt(row.dataset.cpusPend) || 0;
           totals.done += parseInt(row.dataset.done) || 0;
           totals.fail += parseInt(row.dataset.fail) || 0;
+          totals.cpu += parseFloat(row.dataset.cpuEff || 0) * (parseInt(row.dataset.done) || 0);
+          totals.wallCpus += parseInt(row.dataset.done) || 0;
         }
       }
     });
@@ -310,7 +322,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       if (wfFilter && crossRef) {
         // Workflow filter active: recompute site values from visible workflows
         var siteTotals = {};
-        var siteCompTotals = {};
+        var siteCompTotals = {};  // {site: [done, fail, cpu, wall_cpus, slot_ok, slot_all]}
         visibleWfs.forEach(function(wf) {
           var sites = crossRef[wf];
           if (!sites) return;
@@ -325,15 +337,15 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
             for (var site in cSites) {
               var cv = cSites[site];
               var sc = siteCompTotals[site];
-              if (!sc) { sc = [0,0]; siteCompTotals[site] = sc; }
-              sc[0] += cv[0]; sc[1] += cv[1];
+              if (!sc) { sc = [0,0,0,0,0,0]; siteCompTotals[site] = sc; }
+              for (var ci = 0; ci < 6; ci++) sc[ci] += cv[ci] || 0;
             }
           }
         });
         sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
           var site = row.dataset.name;
           var counts = siteTotals[site] || [0,0,0,0];
-          var comp = siteCompTotals[site] || [0,0];
+          var comp = siteCompTotals[site] || [0,0,0,0,0,0];
           var cells = row.querySelectorAll('td');
           cells[1].textContent = fmt(counts[0]);
           cells[2].textContent = fmt(counts[1]);
@@ -348,6 +360,11 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
             cells[8].textContent = comp[0] ? (comp[1] / comp[0] * 100).toFixed(1) + '%' : '';
             cells[8].className = (comp[0] && comp[1] / comp[0] > 0.05) ? 'warn' : '';
           }
+          // Efficiency columns
+          var sCpuEff = comp[3] ? comp[2] / comp[3] : 0;
+          var sProcEff = comp[5] ? comp[4] / comp[5] : 0;
+          if (cells[9]) { cells[9].textContent = comp[0] ? (sCpuEff * 100).toFixed(1) + '%' : ''; cells[9].className = sCpuEff && sCpuEff < 0.5 ? 'warn' : ''; }
+          if (cells[10]) { cells[10].textContent = comp[0] ? (sProcEff * 100).toFixed(1) + '%' : ''; cells[10].className = sProcEff && sProcEff < 0.8 ? 'warn' : ''; }
           var siteTextMatch = !siteFilter || site.toLowerCase().indexOf(siteFilter) !== -1;
           var hasData = counts[0] || counts[1] || comp[0];
           row.style.display = (siteTextMatch && hasData) ? '' : 'none';

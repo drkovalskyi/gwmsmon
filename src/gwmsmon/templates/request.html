@@ -97,25 +97,45 @@
 {% if any_completions %}
 <details class="section" open data-section="{{ view }}_req_exitcodes">
   <summary><h2>Completion Summary</h2></summary>
+  {% set eff = exit_codes.get('efficiency', {}) if exit_codes else {} %}
+  {% set lt_eff = exit_codes.get('lifetime_efficiency') if exit_codes else None %}
   <table class="data-table compact">
     <thead><tr>
       <th>Window</th>
       <th data-sort="num">Completed</th>
       <th data-sort="num">Failed</th>
       <th data-sort="num">Failure Rate</th>
+      <th data-sort="num">CPU Eff</th>
+      <th data-sort="num">Proc Eff</th>
+      <th data-sort="num">CPU Hours</th>
     </tr></thead>
     <tbody>
     {% for wlabel in ['1h', '24h', '7d'] %}
     {% set w = wins.get(wlabel, {}) %}
+    {% set we = eff.get(wlabel, {}) %}
     {% if w.get('total', 0) > 0 %}
     <tr>
       <td>{{ wlabel }}</td>
       <td>{{ w.total|fmt }}</td>
       <td>{{ w.failures|fmt }}</td>
       <td class="{% if w.failure_rate > 0.05 %}warn{% endif %}">{{ (w.failure_rate * 100)|round(1) }}%</td>
+      <td class="{% if we.get('running_eff', 0) and we.running_eff < 0.5 %}warn{% endif %}">{{ (we.get('running_eff', 0) * 100)|round(1) }}%</td>
+      <td class="{% if we.get('processing_eff', 0) and we.processing_eff < 0.8 %}warn{% endif %}">{{ (we.get('processing_eff', 0) * 100)|round(1) }}%</td>
+      <td>{{ we.get('cpu_hours', 0)|fmt }}</td>
     </tr>
     {% endif %}
     {% endfor %}
+    {% if lt_eff %}
+    <tr style="font-weight:600">
+      <td>lifetime</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td class="{% if lt_eff.running_eff < 0.5 %}warn{% endif %}">{{ (lt_eff.running_eff * 100)|round(1) }}%</td>
+      <td class="{% if lt_eff.processing_eff < 0.8 %}warn{% endif %}">{{ (lt_eff.processing_eff * 100)|round(1) }}%</td>
+      <td>{{ lt_eff.cpu_hours|fmt }}</td>
+    </tr>
+    {% endif %}
     </tbody>
   </table>
 

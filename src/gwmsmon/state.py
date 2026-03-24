@@ -105,6 +105,9 @@ class State:
         self.exit_codes_by_site = {} # {view: {workflow: {site: {minute_ts: {code: count}}}}}
         self.exit_code_detail = {}   # {view: {code: {workflow: count, site: count, ...}}}
         self.failed_job_records = {} # {view: {site: {workflow: [record, ...]}}}
+        self.efficiency = {}         # {view: {wf: {ts: {cpu, wall_cpus, slot_ok, slot_all}}}}
+        self.efficiency_by_site = {} # {view: {wf: {site: {ts: {cpu, wall_cpus, slot_ok, slot_all}}}}}
+        self.efficiency_lifetime = {} # {wf: {cpu, wall_cpus, slot_ok, slot_all}}
         self.history_watermarks = {} # {schedd_name: timestamp}
 
     def update(self, jobs, summary_ads, factory_data, accounting_ads=None):
@@ -676,6 +679,8 @@ class State:
                 site_bucket[minute][code_str] += 1
                 self._add_exit_detail("prodview", code_str, minute,
                                       request, site, "cmst1")
+                self._add_efficiency("prodview", request, site,
+                                     minute, code_str, job)
                 # Track failed job records for log links
                 if code_str != "0" and job.get("WMAgent_JobID"):
                     rec_list = (_ensure(self.failed_job_records,
@@ -733,6 +738,8 @@ class State:
                     site_bucket[minute][code_str] += 1
                     self._add_exit_detail("analysisview", code_str, minute,
                                           wf_key, site, user)
+                    self._add_efficiency("analysisview", wf_key, site,
+                                         minute, code_str, job)
 
             # globalview: all jobs — best Chirp, then signal, then raw
             chirp_gv = job.get("Chirp_WMCore_cmsRun_ExitCode")
@@ -770,6 +777,8 @@ class State:
             site_bucket[minute][gv_code] += 1
             self._add_exit_detail("globalview", gv_code, minute,
                                   gv_key, site, owner)
+            self._add_efficiency("globalview", gv_key, site,
+                                 minute, gv_code, job)
 
         self._prune_exit_code_window()
         self._prune_exit_detail_window()
@@ -789,6 +798,52 @@ class State:
         mb.setdefault("users", {})
         mb["users"].setdefault(user, 0)
         mb["users"][user] += 1
+
+    def _add_efficiency(self, view, workflow, site, minute,
+                        code_str, job):
+        """Accumulate efficiency metrics for a completed job."""
+        cpu = (job.get("RemoteUserCpu", 0) or 0) + \
+              (job.get("RemoteSysCpu", 0) or 0)
+        req_cpus = job.get("RequestCpus", 1) or 1
+        wall = job.get("RemoteWallClockTime", 0) or 0
+        slot = job.get("CommittedSlotTime", 0) or (wall * req_cpus)
+        wall_cpus = wall * req_cpus
+        if wall_cpus <= 0:
+            return
+        is_ok = code_str == "0"
+
+        # Per-workflow
+        eb = _ensure(self.efficiency, view, workflow)
+        eb.setdefault(minute, {"cpu": 0, "wall_cpus": 0,
+                               "slot_ok": 0, "slot_all": 0})
+        b = eb[minute]
+        b["cpu"] += cpu
+        b["wall_cpus"] += wall_cpus
+        b["slot_all"] += slot
+        if is_ok:
+            b["slot_ok"] += slot
+
+        # Per-workflow-per-site
+        sb = _ensure(self.efficiency_by_site, view, workflow, site)
+        sb.setdefault(minute, {"cpu": 0, "wall_cpus": 0,
+                               "slot_ok": 0, "slot_all": 0})
+        s = sb[minute]
+        s["cpu"] += cpu
+        s["wall_cpus"] += wall_cpus
+        s["slot_all"] += slot
+        if is_ok:
+            s["slot_ok"] += slot
+
+        # Lifetime (prodview only, not time-bucketed)
+        if view == "prodview":
+            lt = self.efficiency_lifetime.setdefault(
+                workflow, {"cpu": 0, "wall_cpus": 0,
+                           "slot_ok": 0, "slot_all": 0})
+            lt["cpu"] += cpu
+            lt["wall_cpus"] += wall_cpus
+            lt["slot_all"] += slot
+            if is_ok:
+                lt["slot_ok"] += slot
 
     def _prune_exit_detail_window(self):
         """Remove exit code detail buckets older than the rolling window."""
@@ -819,6 +874,33 @@ class State:
                 del workflows[wf]
         # Prune per-site exit code buckets
         for view, workflows in self.exit_codes_by_site.items():
+            dead_wfs = []
+            for wf, sites in workflows.items():
+                dead_sites = []
+                for site, buckets in sites.items():
+                    dead = [ts for ts in buckets if ts < cutoff]
+                    for ts in dead:
+                        del buckets[ts]
+                    if not buckets:
+                        dead_sites.append(site)
+                for site in dead_sites:
+                    del sites[site]
+                if not sites:
+                    dead_wfs.append(wf)
+            for wf in dead_wfs:
+                del workflows[wf]
+        # Prune efficiency buckets (same 7d cutoff)
+        for view, workflows in self.efficiency.items():
+            dead_wfs = []
+            for wf, buckets in workflows.items():
+                dead = [ts for ts in buckets if ts < cutoff]
+                for ts in dead:
+                    del buckets[ts]
+                if not buckets:
+                    dead_wfs.append(wf)
+            for wf in dead_wfs:
+                del workflows[wf]
+        for view, workflows in self.efficiency_by_site.items():
             dead_wfs = []
             for wf, sites in workflows.items():
                 dead_sites = []
@@ -876,6 +958,24 @@ class State:
                     overall[code] += count
         return overall
 
+    @staticmethod
+    def _compute_efficiency(buckets, cutoff):
+        """Compute efficiency from time-bucketed data within window."""
+        cpu = wall_cpus = slot_ok = slot_all = 0
+        for ts, b in buckets.items():
+            if ts < cutoff:
+                continue
+            cpu += b.get("cpu", 0)
+            wall_cpus += b.get("wall_cpus", 0)
+            slot_ok += b.get("slot_ok", 0)
+            slot_all += b.get("slot_all", 0)
+        return {
+            "running_eff": round(cpu / wall_cpus, 4) if wall_cpus else 0,
+            "processing_eff": round(slot_ok / slot_all, 4) if slot_all else 0,
+            "cpu_hours": round(cpu / 3600, 1),
+            "wall_cpu_hours": round(wall_cpus / 3600, 1),
+        }
+
     def _build_completion_histogram(self, view):
         """Build per-bucket success/failure counts for histogram chart."""
         bucket_totals = {}  # {timestamp: {"success": N, "failure": N}}
@@ -919,6 +1019,26 @@ class State:
                     "codes": wcodes,
                 }
 
+            # View-level efficiency (all workflows combined)
+            view_eff = {}
+            for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                cutoff = now_bucket - wsec
+                cpu = wall_cpus = slot_ok = slot_all = 0
+                for wf_b in self.efficiency.get(view, {}).values():
+                    for ts, b in wf_b.items():
+                        if ts < cutoff:
+                            continue
+                        cpu += b.get("cpu", 0)
+                        wall_cpus += b.get("wall_cpus", 0)
+                        slot_ok += b.get("slot_ok", 0)
+                        slot_all += b.get("slot_all", 0)
+                view_eff[wlabel] = {
+                    "running_eff": round(cpu / wall_cpus, 4) if wall_cpus else 0,
+                    "processing_eff": round(slot_ok / slot_all, 4) if slot_all else 0,
+                    "cpu_hours": round(cpu / 3600, 1),
+                    "wall_cpu_hours": round(wall_cpus / 3600, 1),
+                }
+
             # Backward-compat top-level from 1h window
             w1h = windows.get("1h", {})
             _atomic_json(os.path.join(basedir, "exit_codes.json"), {
@@ -929,6 +1049,7 @@ class State:
                 "failure_rate": w1h.get("failure_rate", 0),
                 "codes": w1h.get("codes", {}),
                 "windows": windows,
+                "efficiency": view_eff,
             })
 
             # Completion histogram
@@ -994,11 +1115,34 @@ class State:
                         "codes": wcodes,
                     }
                 w1h = wf_windows.get("1h", {})
+                # Per-workflow efficiency (windowed)
+                wf_eff_buckets = self.efficiency.get(view, {}).get(wf, {})
+                wf_eff = {}
+                for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                    wf_eff[wlabel] = self._compute_efficiency(
+                        wf_eff_buckets, now_site - wsec)
+                # Lifetime efficiency
+                lt_eff = self.efficiency_lifetime.get(wf)
+                lt_eff_out = None
+                if lt_eff and lt_eff["wall_cpus"] > 0:
+                    lt_eff_out = {
+                        "running_eff": round(
+                            lt_eff["cpu"] / lt_eff["wall_cpus"], 4),
+                        "processing_eff": round(
+                            lt_eff["slot_ok"] / lt_eff["slot_all"], 4)
+                        if lt_eff["slot_all"] else 0,
+                        "cpu_hours": round(lt_eff["cpu"] / 3600, 1),
+                        "wall_cpu_hours": round(
+                            lt_eff["wall_cpus"] / 3600, 1),
+                    }
                 if w1h.get("total", 0):
+                    eff1h = wf_eff.get("1h", {})
                     wf_completion[wf] = {
                         "total": w1h["total"],
                         "failures": w1h["failures"],
                         "failure_rate": w1h["failure_rate"],
+                        "running_eff": eff1h.get("running_eff", 0),
+                        "processing_eff": eff1h.get("processing_eff", 0),
                     }
                 _atomic_json(os.path.join(wf_dir, "exit_codes.json"), {
                     "updated": self.updated,
@@ -1008,6 +1152,8 @@ class State:
                     "failure_rate": w1h.get("failure_rate", 0),
                     "windows": wf_windows,
                     "sites": wf_sites_ec,
+                    "efficiency": wf_eff,
+                    "lifetime_efficiency": lt_eff_out,
                 })
                 # Per-request completion histogram
                 wf_buckets = self.exit_codes.get(view, {}).get(wf, {})
@@ -1149,17 +1295,52 @@ class State:
                             if code != "0":
                                 wf_site_fail += cnt
                     if wf_site_done:
+                        # Per-wf-per-site efficiency raw values for 1h
+                        eff_b = self.efficiency_by_site.get(
+                            view, {}).get(wf, {}).get(site, {})
+                        cpu = wall_cpus = slot_ok = slot_all = 0
+                        for ts, b in eff_b.items():
+                            if ts < cutoff_1h:
+                                continue
+                            cpu += b.get("cpu", 0)
+                            wall_cpus += b.get("wall_cpus", 0)
+                            slot_ok += b.get("slot_ok", 0)
+                            slot_all += b.get("slot_all", 0)
                         completion_xref.setdefault(wf, {})[site] = [
-                            wf_site_done, wf_site_fail]
+                            wf_site_done, wf_site_fail,
+                            round(cpu), round(wall_cpus),
+                            round(slot_ok), round(slot_all)]
             for site, site_wins in view_site_ec.items():
                 for w in site_wins.values():
                     w["failure_rate"] = (round(w["failures"] / w["total"], 4)
                                          if w["total"] else 0)
-            # Merge per-code counts into site data
+            # Merge per-code counts and efficiency into site data
             site_ec_out = {}
             for site, wins in view_site_ec.items():
                 entry = dict(wins)
                 entry["codes"] = site_codes_1h.get(site, {})
+                # Per-site efficiency (aggregate across workflows)
+                site_eff = {}
+                for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                    cutoff = now_site - wsec
+                    cpu = wall_cpus = slot_ok = slot_all = 0
+                    for wf_sites in self.efficiency_by_site.get(
+                            view, {}).values():
+                        sb = wf_sites.get(site, {})
+                        for ts, b in sb.items():
+                            if ts < cutoff:
+                                continue
+                            cpu += b.get("cpu", 0)
+                            wall_cpus += b.get("wall_cpus", 0)
+                            slot_ok += b.get("slot_ok", 0)
+                            slot_all += b.get("slot_all", 0)
+                    site_eff[wlabel] = {
+                        "running_eff": round(cpu / wall_cpus, 4)
+                        if wall_cpus else 0,
+                        "processing_eff": round(slot_ok / slot_all, 4)
+                        if slot_all else 0,
+                    }
+                entry["efficiency"] = site_eff
                 site_ec_out[site] = entry
             _atomic_json(os.path.join(basedir, "site_exit_codes.json"), {
                 "updated": self.updated,
@@ -1271,6 +1452,24 @@ class State:
                 for view, workflows in self.exit_codes_by_site.items()
             },
             "failed_job_records": self.failed_job_records,
+            "efficiency": {
+                view: {
+                    wf: {str(ts): b for ts, b in buckets.items()}
+                    for wf, buckets in workflows.items()
+                }
+                for view, workflows in self.efficiency.items()
+            },
+            "efficiency_by_site": {
+                view: {
+                    wf: {
+                        site: {str(ts): b for ts, b in buckets.items()}
+                        for site, buckets in sites.items()
+                    }
+                    for wf, sites in workflows.items()
+                }
+                for view, workflows in self.efficiency_by_site.items()
+            },
+            "efficiency_lifetime": self.efficiency_lifetime,
         })
 
     def restore_exit_code_state(self, cfg):
@@ -1348,6 +1547,25 @@ class State:
                             del wfs[wf]
                     if not wfs:
                         del sites[site]
+
+            # Restore efficiency
+            for raw_key, target in [
+                ("efficiency", self.efficiency),
+                ("efficiency_by_site", self.efficiency_by_site)]:
+                raw = data.get(raw_key, {})
+                for view, workflows in raw.items():
+                    target[view] = {}
+                    if raw_key == "efficiency":
+                        for wf, buckets in workflows.items():
+                            target[view][wf] = {
+                                int(ts): b for ts, b in buckets.items()}
+                    else:
+                        for wf, sites in workflows.items():
+                            target[view][wf] = {}
+                            for site, buckets in sites.items():
+                                target[view][wf][site] = {
+                                    int(ts): b for ts, b in buckets.items()}
+            self.efficiency_lifetime = data.get("efficiency_lifetime", {})
 
             total_wf = sum(len(wfs) for wfs in self.exit_codes.values())
             total_failed = sum(

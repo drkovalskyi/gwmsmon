@@ -583,8 +583,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             os.path.join(basedir, "_sites"),
             f"{safe_site}_failed_jobs.json")
         jobs = data.get("requests", {}).get(request, [])
-        # Build log URLs and check file existence on EOS FUSE mount
-        verified = []
+        # Build log URLs, check file existence on EOS FUSE mount
         for job in jobs:
             task = job.get("task", "")
             task_short = task.rsplit("/", 1)[-1] if task else ""
@@ -596,10 +595,9 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             if os.path.exists(eos_path):
                 job["log_url"] = (
                     f"{EOS_LOG_URL}/{request}/{task_short}/{filename}")
-                job["desc"] = _describe_exit_code(
-                    str(job.get("code", "")))
-                verified.append(job)
-        jobs = verified
+            else:
+                job["log_url"] = ""
+            job["desc"] = _describe_exit_code(str(job.get("code", "")))
 
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)

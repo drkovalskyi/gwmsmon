@@ -3,11 +3,11 @@
 {% block content %}
 <h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / <a href="/{{ view }}/site/{{ site_name }}">{{ site_name }}</a> / Failed Jobs</h1>
 <p>Request: <a href="/{{ view }}/request/{{ request_name }}">{{ request_name }}</a></p>
-<p style="color:var(--text-th);font-size:13px">Showing failed jobs with logs available on EOS.</p>
+<p style="color:var(--text-th);font-size:13px">Log links shown where tarballs exist on EOS. Grid certificate required to download.</p>
 
 {% if jobs %}
 <details class="section" open>
-  <summary><h2>Failed Jobs with Logs ({{ jobs|length }})</h2></summary>
+  <summary><h2>Failed Jobs ({{ jobs|length }})</h2></summary>
   <div class="table-scroll">
   <table class="data-table sortable" data-sort-default="0:asc">
     <thead><tr>
@@ -40,7 +40,7 @@
       <td>{{ job.get('cmssw_events', 0)|fmt }}</td>
       <td>{% if job.get('cmssw_done') %}yes{% elif job.get('cmssw_time', 0) %}no{% endif %}</td>
       <td title="{{ job.get('task', '') }}">{{ job.get('task', '').rsplit('/', 1)[-1] }}</td>
-      <td><a href="{{ job.log_url }}" target="_blank" rel="noopener">tar.gz</a></td>
+      <td>{% if job.log_url %}<a href="{{ job.log_url }}" target="_blank" rel="noopener">tar.gz</a>{% endif %}</td>
     </tr>
     {% endfor %}
     </tbody>
@@ -48,6 +48,6 @@
   </div>
 </details>
 {% else %}
-<p>No failed jobs with logs on EOS found in the last hour.</p>
+<p>No failed jobs recorded in the last hour.</p>
 {% endif %}
 {% endblock %}

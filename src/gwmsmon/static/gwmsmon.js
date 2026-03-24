@@ -182,11 +182,11 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     }).catch(function() {});
   }
 
-  // Save original site cell values
+  // Save original site cell values (innerHTML to preserve links)
   if (sitesTable) {
     sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
       row._origCells = Array.from(row.querySelectorAll('td')).map(function(td) {
-        return td.textContent;
+        return td.innerHTML;
       });
     });
   }
@@ -241,10 +241,10 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       var visible = textMatch && siteMatch;
       row.style.display = visible ? '' : 'none';
 
-      // Save original cell values once
+      // Save original cell values once (innerHTML to preserve links)
       if (!row._origCells) {
         row._origCells = Array.from(row.querySelectorAll('td')).map(function(td) {
-          return td.textContent;
+          return td.innerHTML;
         });
       }
 
@@ -276,7 +276,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         }
       } else if (!matchingSites) {
         // Restore original values
-        row._origCells.forEach(function(v, i) { if (cells[i]) cells[i].textContent = v; });
+        row._origCells.forEach(function(v, i) { if (cells[i]) cells[i].innerHTML = v; });
       }
 
       if (visible) {
@@ -362,7 +362,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
           cells[3].textContent = fmt(counts[2]);
           cells[4].textContent = fmt(counts[3]);
           // Restore original UniquePressure
-          if (cells[5] && row._origCells) cells[5].textContent = row._origCells[5];
+          if (cells[5] && row._origCells) cells[5].innerHTML = row._origCells[5];
           // Update completion columns
           if (cells[6]) cells[6].textContent = fmt(comp[0]);
           if (cells[7]) cells[7].textContent = fmt(comp[1]);
@@ -384,7 +384,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
           if (row._origCells) {
             var cells = row.querySelectorAll('td');
-            row._origCells.forEach(function(v, i) { if (cells[i]) cells[i].textContent = v; });
+            row._origCells.forEach(function(v, i) { if (cells[i]) cells[i].innerHTML = v; });
           }
           var siteTextMatch = !siteFilter || (row.dataset.name || '').toLowerCase().indexOf(siteFilter) !== -1;
           row.style.display = siteTextMatch ? '' : 'none';

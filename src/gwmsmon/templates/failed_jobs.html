@@ -3,8 +3,6 @@
 {% block content %}
 <h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / <a href="/{{ view }}/site/{{ site_name }}">{{ site_name }}</a> / Failed Jobs</h1>
 <p>Request: <a href="/{{ view }}/request/{{ request_name }}">{{ request_name }}</a></p>
-<p style="color:var(--text-th);font-size:13px">Log links shown where tarballs exist on EOS. Grid certificate required to download.</p>
-
 {% if jobs %}
 <details class="section" open>
   <summary><h2>Failed Jobs ({{ jobs|length }})</h2></summary>

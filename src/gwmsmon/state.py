@@ -804,10 +804,12 @@ class State:
         """Accumulate efficiency metrics for a completed job."""
         cpu = (job.get("RemoteUserCpu", 0) or 0) + \
               (job.get("RemoteSysCpu", 0) or 0)
-        req_cpus = job.get("RequestCpus", 1) or 1
+        cpus = job.get("CpusProvisioned") or job.get("RequestCpus") or 1
+        if not isinstance(cpus, (int, float)):
+            cpus = 1
         wall = job.get("RemoteWallClockTime", 0) or 0
-        slot = job.get("CommittedSlotTime", 0) or (wall * req_cpus)
-        wall_cpus = wall * req_cpus
+        slot = job.get("CommittedSlotTime", 0) or (wall * cpus)
+        wall_cpus = wall * cpus
         if wall_cpus <= 0:
             return
         is_ok = code_str == "0"

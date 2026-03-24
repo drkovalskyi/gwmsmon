@@ -36,7 +36,7 @@
     <div class="stat-label">Failed (1h)</div>
   </a>
   {% set ve = exit_codes.get('efficiency', {}).get('1h', {}) %}
-  {% if ve.get('running_eff', 0) %}
+  {% if ve %}
   <div class="stat">
     <div class="stat-value {% if ve.running_eff < 0.5 %}warn{% endif %}" id="stat-cpu-eff">{{ (ve.running_eff * 100)|round(1) }}%</div>
     <div class="stat-label">CPU Eff (1h)</div>
@@ -197,8 +197,8 @@
       <td>{{ wfc.get('total', 0)|fmt }}</td>
       <td>{{ wfc.get('failures', 0)|fmt }}</td>
       <td class="{% if wfc.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.failure_rate * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if wfc.get('lt_running_eff', 0) and wfc.lt_running_eff < 0.5 %}warn{% endif %}">{% if wfc.get('lt_running_eff', 0) %}{{ (wfc.lt_running_eff * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if wfc.get('lt_processing_eff', 0) and wfc.lt_processing_eff < 0.8 %}warn{% endif %}">{% if wfc.get('lt_processing_eff', 0) %}{{ (wfc.lt_processing_eff * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if wfc.get('lt_running_eff', 0) and wfc.lt_running_eff < 0.5 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.get('lt_running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if wfc.get('lt_processing_eff', 0) and wfc.lt_processing_eff < 0.8 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.get('lt_processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     {% endif %}
@@ -241,8 +241,8 @@
       <td>{{ sec.get('total', 0)|fmt }}</td>
       <td>{{ sec.get('failures', 0)|fmt }}</td>
       <td class="{% if sec.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.failure_rate * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if seff.get('running_eff', 0) and seff.running_eff < 0.5 %}warn{% endif %}">{% if seff.get('running_eff', 0) %}{{ (seff.running_eff * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if seff.get('processing_eff', 0) and seff.processing_eff < 0.8 %}warn{% endif %}">{% if seff.get('processing_eff', 0) %}{{ (seff.processing_eff * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if seff.get('running_eff', 0) and seff.running_eff < 0.5 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (seff.get('running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if seff.get('processing_eff', 0) and seff.processing_eff < 0.8 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (seff.get('processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     </tbody>

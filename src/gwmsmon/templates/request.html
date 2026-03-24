@@ -130,8 +130,8 @@
       <td>{{ w.total|fmt }}</td>
       <td>{{ w.failures|fmt }}</td>
       <td class="{% if w.failure_rate > 0.05 %}warn{% endif %}">{{ (w.failure_rate * 100)|round(1) }}%</td>
-      <td class="{% if we.get('running_eff', 0) and we.running_eff < 0.5 %}warn{% endif %}">{% if we.get('running_eff', 0) %}{{ (we.running_eff * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if we.get('processing_eff', 0) and we.processing_eff < 0.8 %}warn{% endif %}">{% if we.get('processing_eff', 0) %}{{ (we.processing_eff * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if we.get('running_eff', 0) and we.running_eff < 0.5 %}warn{% endif %}">{% if w.get('total', 0) %}{{ (we.get('running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if we.get('processing_eff', 0) and we.processing_eff < 0.8 %}warn{% endif %}">{% if w.get('total', 0) %}{{ (we.get('processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>
       <td>{{ we.get('cpu_hours', 0)|fmt }}</td>
     </tr>
     {% endif %}
@@ -207,8 +207,8 @@
       <td>{{ sec.get('total', 0)|fmt }}</td>
       <td>{{ sec.get('failures', 0)|fmt }}</td>
       <td class="{% if sec.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.failure_rate * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if sec.get('running_eff', 0) and sec.running_eff < 0.5 %}warn{% endif %}">{% if sec.get('running_eff', 0) %}{{ (sec.running_eff * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if sec.get('processing_eff', 0) and sec.processing_eff < 0.8 %}warn{% endif %}">{% if sec.get('processing_eff', 0) %}{{ (sec.processing_eff * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if sec.get('running_eff', 0) and sec.running_eff < 0.5 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.get('running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if sec.get('processing_eff', 0) and sec.processing_eff < 0.8 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.get('processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     </tbody>

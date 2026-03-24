@@ -1257,6 +1257,7 @@ class State:
                 }
                 for view, workflows in self.exit_codes_by_site.items()
             },
+            "failed_job_records": self.failed_job_records,
         })
 
     def restore_exit_code_state(self, cfg):
@@ -1322,9 +1323,28 @@ class State:
                         if merged:
                             self.exit_codes_by_site[view][wf][site] = merged
 
+            # Restore failed_job_records and prune old entries
+            self.failed_job_records = data.get("failed_job_records", {})
+            cutoff_1h = int(time.time()) - EXIT_CODE_WINDOWS["1h"]
+            for view, sites in self.failed_job_records.items():
+                for site, wfs in list(sites.items()):
+                    for wf, records in list(wfs.items()):
+                        wfs[wf] = [r for r in records
+                                   if r.get("ts", 0) >= cutoff_1h]
+                        if not wfs[wf]:
+                            del wfs[wf]
+                    if not wfs:
+                        del sites[site]
+
             total_wf = sum(len(wfs) for wfs in self.exit_codes.values())
-            log.info("restored exit code state: %d watermarks, %d workflows",
-                     len(self.history_watermarks), total_wf)
+            total_failed = sum(
+                len(recs)
+                for sites in self.failed_job_records.values()
+                for wfs in sites.values()
+                for recs in wfs.values())
+            log.info("restored exit code state: %d watermarks, %d workflows, "
+                     "%d failed job records",
+                     len(self.history_watermarks), total_wf, total_failed)
         except (json.JSONDecodeError, OSError):
             log.warning("failed to restore exit code state", exc_info=True)
 

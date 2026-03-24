@@ -35,6 +35,17 @@
     </div>
     <div class="stat-label">Failed (1h)</div>
   </a>
+  {% set ve = exit_codes.get('efficiency', {}).get('1h', {}) %}
+  {% if ve.get('running_eff', 0) %}
+  <div class="stat">
+    <div class="stat-value {% if ve.running_eff < 0.5 %}warn{% endif %}" id="stat-cpu-eff">{{ (ve.running_eff * 100)|round(1) }}%</div>
+    <div class="stat-label">CPU Eff (1h)</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value {% if ve.processing_eff < 0.8 %}warn{% endif %}" id="stat-proc-eff">{{ (ve.processing_eff * 100)|round(1) }}%</div>
+    <div class="stat-label">Proc Eff (1h)</div>
+  </div>
+  {% endif %}
   {% endif %}
 </div>
 

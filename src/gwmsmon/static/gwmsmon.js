@@ -316,6 +316,16 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       el.textContent = rate;
       el.className = 'stat-value' + ((totals.done && totals.fail / totals.done > 0.05) ? ' warn' : '');
     }
+    if ((el = document.getElementById('stat-cpu-eff'))) {
+      var ce = totals.wallCpus ? (totals.cpu / totals.wallCpus * 100).toFixed(1) + '%' : '';
+      el.textContent = ce;
+      el.className = 'stat-value' + ((totals.wallCpus && totals.cpu / totals.wallCpus < 0.5) ? ' warn' : '');
+    }
+    if ((el = document.getElementById('stat-proc-eff'))) {
+      var pe = totals.slotAll ? (totals.slotOk / totals.slotAll * 100).toFixed(1) + '%' : '';
+      el.textContent = pe;
+      el.className = 'stat-value' + ((totals.slotAll && totals.slotOk / totals.slotAll < 0.8) ? ' warn' : '');
+    }
 
     // 4. Recompute sites from visible workflows
     if (sitesTable) {

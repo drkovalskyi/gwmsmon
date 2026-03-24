@@ -166,16 +166,20 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
   // Load cross-reference data, then apply filters if inputs have values
   var crossRef = null;
+  var completionXref = null;
   if (view) {
-    fetch('/' + view + '/json/cross_reference.json')
-      .then(function(r) { return r.ok ? r.json() : null; })
-      .then(function(d) {
-        crossRef = d;
-        if ((wfInput && wfInput.value) || (siteInput && siteInput.value)) {
-          applyFilters();
-        }
-      })
-      .catch(function() {});
+    Promise.all([
+      fetch('/' + view + '/json/cross_reference.json')
+        .then(function(r) { return r.ok ? r.json() : null; }),
+      fetch('/' + view + '/json/completion_cross_reference.json')
+        .then(function(r) { return r.ok ? r.json() : null; })
+    ]).then(function(results) {
+      crossRef = results[0];
+      completionXref = results[1];
+      if ((wfInput && wfInput.value) || (siteInput && siteInput.value)) {
+        applyFilters();
+      }
+    }).catch(function() {});
   }
 
   // Save original site cell values
@@ -205,23 +209,27 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
     // 2. Filter workflow rows: text match AND site match
     var visibleWfs = new Set();
-    var totals = {running: 0, idle: 0, cpusUse: 0, cpusPend: 0, count: 0};
+    var totals = {running: 0, idle: 0, cpusUse: 0, cpusPend: 0, count: 0, done: 0, fail: 0};
     wfTable.querySelectorAll('tbody tr').forEach(function(row) {
       var textMatch = !wfFilter || row.textContent.toLowerCase().indexOf(wfFilter) !== -1;
       var siteMatch = true;
       var name = row.dataset.name;
-      var wfCounts = null; // per-site contribution for this workflow
+      var wfCounts = null; // [R, I, C, P] per-site contribution
+      var wfComp = null;   // [done, fail] per-site completion
       if (matchingSites && crossRef) {
         var wfSites = name ? crossRef[name] : null;
         if (wfSites) {
           siteMatch = false;
           wfCounts = [0, 0, 0, 0];
+          wfComp = [0, 0];
+          var cSites = completionXref && completionXref[name] ? completionXref[name] : {};
           for (var s in wfSites) {
             if (matchingSites.has(s)) {
               siteMatch = true;
               var v = wfSites[s];
               wfCounts[0] += v[0]; wfCounts[1] += v[1];
               wfCounts[2] += v[2]; wfCounts[3] += v[3];
+              if (cSites[s]) { wfComp[0] += cSites[s][0]; wfComp[1] += cSites[s][1]; }
             }
           }
         } else {
@@ -241,15 +249,28 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       // Update workflow row cells when site filter is active
       var cells = row.querySelectorAll('td');
       var n = cells.length;
+      // Detect if row has completion columns (prodview: 9 cells with Prio)
+      var hasComp = n >= 9 && row.dataset.done !== undefined;
       if (matchingSites && wfCounts) {
-        // Last 4 cells are always: Running, Idle, CPUs Use, CPUs Pend
-        cells[n - 4].textContent = fmt(wfCounts[0]);
-        cells[n - 3].textContent = fmt(wfCounts[1]);
-        cells[n - 2].textContent = fmt(wfCounts[2]);
-        cells[n - 1].textContent = fmt(wfCounts[3]);
+        if (hasComp) {
+          // prodview: Name Prio R I C P Done Fail Fail%
+          cells[2].textContent = fmt(wfCounts[0]);
+          cells[3].textContent = fmt(wfCounts[1]);
+          cells[4].textContent = fmt(wfCounts[2]);
+          cells[5].textContent = fmt(wfCounts[3]);
+          cells[6].textContent = fmt(wfComp[0]);
+          cells[7].textContent = fmt(wfComp[1]);
+          cells[8].textContent = wfComp[0] ? (wfComp[1] / wfComp[0] * 100).toFixed(1) + '%' : '';
+          cells[8].className = (wfComp[0] && wfComp[1] / wfComp[0] > 0.05) ? 'warn' : '';
+        } else {
+          cells[n - 4].textContent = fmt(wfCounts[0]);
+          cells[n - 3].textContent = fmt(wfCounts[1]);
+          cells[n - 2].textContent = fmt(wfCounts[2]);
+          cells[n - 1].textContent = fmt(wfCounts[3]);
+        }
       } else if (!matchingSites) {
         // Restore original values
-        row._origCells.forEach(function(v, i) { cells[i].textContent = v; });
+        row._origCells.forEach(function(v, i) { if (cells[i]) cells[i].textContent = v; });
       }
 
       if (visible) {
@@ -258,11 +279,14 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         if (wfCounts) {
           totals.running += wfCounts[0]; totals.idle += wfCounts[1];
           totals.cpusUse += wfCounts[2]; totals.cpusPend += wfCounts[3];
+          if (wfComp) { totals.done += wfComp[0]; totals.fail += wfComp[1]; }
         } else {
           totals.running += parseInt(row.dataset.running) || 0;
           totals.idle += parseInt(row.dataset.idle) || 0;
           totals.cpusUse += parseInt(row.dataset.cpusUse) || 0;
           totals.cpusPend += parseInt(row.dataset.cpusPend) || 0;
+          totals.done += parseInt(row.dataset.done) || 0;
+          totals.fail += parseInt(row.dataset.fail) || 0;
         }
       }
     });
@@ -274,12 +298,19 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     if ((el = document.getElementById('stat-cpus-use'))) el.textContent = fmt(totals.cpusUse);
     if ((el = document.getElementById('stat-cpus-pend'))) el.textContent = fmt(totals.cpusPend);
     if ((el = document.getElementById('stat-count'))) el.textContent = fmt(totals.count);
+    if ((el = document.getElementById('stat-done'))) el.textContent = fmt(totals.done);
+    if ((el = document.getElementById('stat-fail-rate'))) {
+      var rate = totals.done ? (totals.fail / totals.done * 100).toFixed(1) + '%' : '';
+      el.textContent = rate;
+      el.className = 'stat-value' + ((totals.done && totals.fail / totals.done > 0.05) ? ' warn' : '');
+    }
 
     // 4. Recompute sites from visible workflows
     if (sitesTable) {
       if (wfFilter && crossRef) {
         // Workflow filter active: recompute site values from visible workflows
         var siteTotals = {};
+        var siteCompTotals = {};
         visibleWfs.forEach(function(wf) {
           var sites = crossRef[wf];
           if (!sites) return;
@@ -289,10 +320,20 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
             if (!s) { s = [0,0,0,0]; siteTotals[site] = s; }
             s[0] += v[0]; s[1] += v[1]; s[2] += v[2]; s[3] += v[3];
           }
+          var cSites = completionXref ? completionXref[wf] : null;
+          if (cSites) {
+            for (var site in cSites) {
+              var cv = cSites[site];
+              var sc = siteCompTotals[site];
+              if (!sc) { sc = [0,0]; siteCompTotals[site] = sc; }
+              sc[0] += cv[0]; sc[1] += cv[1];
+            }
+          }
         });
         sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
           var site = row.dataset.name;
           var counts = siteTotals[site] || [0,0,0,0];
+          var comp = siteCompTotals[site] || [0,0];
           var cells = row.querySelectorAll('td');
           cells[1].textContent = fmt(counts[0]);
           cells[2].textContent = fmt(counts[1]);
@@ -300,8 +341,15 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
           cells[4].textContent = fmt(counts[3]);
           // Restore original UniquePressure
           if (cells[5] && row._origCells) cells[5].textContent = row._origCells[5];
+          // Update completion columns
+          if (cells[6]) cells[6].textContent = fmt(comp[0]);
+          if (cells[7]) cells[7].textContent = fmt(comp[1]);
+          if (cells[8]) {
+            cells[8].textContent = comp[0] ? (comp[1] / comp[0] * 100).toFixed(1) + '%' : '';
+            cells[8].className = (comp[0] && comp[1] / comp[0] > 0.05) ? 'warn' : '';
+          }
           var siteTextMatch = !siteFilter || site.toLowerCase().indexOf(siteFilter) !== -1;
-          var hasData = counts[0] || counts[1];
+          var hasData = counts[0] || counts[1] || comp[0];
           row.style.display = (siteTextMatch && hasData) ? '' : 'none';
         });
       } else {
@@ -309,7 +357,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
           if (row._origCells) {
             var cells = row.querySelectorAll('td');
-            row._origCells.forEach(function(v, i) { cells[i].textContent = v; });
+            row._origCells.forEach(function(v, i) { if (cells[i]) cells[i].textContent = v; });
           }
           var siteTextMatch = !siteFilter || (row.dataset.name || '').toLowerCase().indexOf(siteFilter) !== -1;
           row.style.display = siteTextMatch ? '' : 'none';

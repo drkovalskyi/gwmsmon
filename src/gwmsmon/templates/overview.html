@@ -26,11 +26,11 @@
   </div>
   {% if exit_codes and exit_codes.get('total', 0) > 0 %}
   <a href="/{{ view }}/completed" class="stat" style="text-decoration:none">
-    <div class="stat-value">{{ exit_codes.total|fmt }}</div>
+    <div class="stat-value" id="stat-done">{{ exit_codes.total|fmt }}</div>
     <div class="stat-label">Completed (1h)</div>
   </a>
   <a href="/{{ view }}/completed" class="stat" style="text-decoration:none">
-    <div class="stat-value {% if exit_codes.failure_rate > 0.05 %}warn{% endif %}">
+    <div class="stat-value {% if exit_codes.failure_rate > 0.05 %}warn{% endif %}" id="stat-fail-rate">
       {{ (exit_codes.failure_rate * 100)|round(1) }}%
     </div>
     <div class="stat-label">Failed (1h)</div>
@@ -174,7 +174,7 @@
       {% set cpus_pend.v = cpus_pend.v + st_data.get('CpusPending', 0) %}
     {% endfor %}
     {% set wfc = wf_completion.get(name, {}) %}
-    <tr data-name="{{ name }}" data-running="{{ running.v }}" data-idle="{{ idle.v }}" data-cpus-use="{{ cpus_use.v }}" data-cpus-pend="{{ cpus_pend.v }}">
+    <tr data-name="{{ name }}" data-running="{{ running.v }}" data-idle="{{ idle.v }}" data-cpus-use="{{ cpus_use.v }}" data-cpus-pend="{{ cpus_pend.v }}" data-done="{{ wfc.get('total', 0) }}" data-fail="{{ wfc.get('failures', 0) }}">
       <td><a href="/{{ view }}/request/{{ name }}">{{ name }}</a></td>
       <td>{{ prio_info.get('prio', '')|fmt if prio_info else '' }}</td>
       <td>{{ running.v|fmt }}</td>
@@ -213,7 +213,7 @@
     <tbody>
     {% for name, data in sites %}
     {% set sec = site_exit_codes.get(name, {}).get('1h', {}) %}
-    <tr data-name="{{ name }}">
+    <tr data-name="{{ name }}" data-done="{{ sec.get('total', 0) }}" data-fail="{{ sec.get('failures', 0) }}">
       <td><a href="/{{ view }}/site/{{ name }}">{{ name }}</a></td>
       <td>{{ data.get('Running', 0)|fmt }}</td>
       <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>

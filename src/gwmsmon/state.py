@@ -1116,8 +1116,10 @@ class State:
             })
 
             # View-level per-site completion stats (aggregated across all workflows)
+            # Also build completion cross-reference: {wf: {site: [done, fail]}}
             view_site_ec = {}
             site_codes_1h = {}  # {site: {code: count}} for 1h window
+            completion_xref = {}  # {wf: {site: [done_1h, fail_1h]}}
             cutoff_1h = now_site - EXIT_CODE_WINDOWS["1h"]
             for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
                 for site, buckets in site_data.items():
@@ -1133,7 +1135,9 @@ class State:
                                 sw["total"] += cnt
                                 if code != "0":
                                     sw["failures"] += cnt
-                    # Per-code counts for 1h window
+                    # Per-code counts for 1h window + completion cross-ref
+                    wf_site_done = 0
+                    wf_site_fail = 0
                     for ts, codes in buckets.items():
                         if ts < cutoff_1h:
                             continue
@@ -1141,6 +1145,12 @@ class State:
                         for code, cnt in codes.items():
                             sc.setdefault(code, 0)
                             sc[code] += cnt
+                            wf_site_done += cnt
+                            if code != "0":
+                                wf_site_fail += cnt
+                    if wf_site_done:
+                        completion_xref.setdefault(wf, {})[site] = [
+                            wf_site_done, wf_site_fail]
             for site, site_wins in view_site_ec.items():
                 for w in site_wins.values():
                     w["failure_rate"] = (round(w["failures"] / w["total"], 4)
@@ -1155,6 +1165,9 @@ class State:
                 "updated": self.updated,
                 "sites": site_ec_out,
             })
+            _atomic_json(os.path.join(basedir,
+                                      "completion_cross_reference.json"),
+                         completion_xref)
 
             # Per-site per-request completion stats
             site_req_ec = {}

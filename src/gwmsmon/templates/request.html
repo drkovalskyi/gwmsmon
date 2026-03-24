@@ -119,8 +119,8 @@
       <td>{{ w.total|fmt }}</td>
       <td>{{ w.failures|fmt }}</td>
       <td class="{% if w.failure_rate > 0.05 %}warn{% endif %}">{{ (w.failure_rate * 100)|round(1) }}%</td>
-      <td class="{% if we.get('running_eff', 0) and we.running_eff < 0.5 %}warn{% endif %}">{{ (we.get('running_eff', 0) * 100)|round(1) }}%</td>
-      <td class="{% if we.get('processing_eff', 0) and we.processing_eff < 0.8 %}warn{% endif %}">{{ (we.get('processing_eff', 0) * 100)|round(1) }}%</td>
+      <td class="{% if we.get('running_eff', 0) and we.running_eff < 0.5 %}warn{% endif %}">{% if we.get('running_eff', 0) %}{{ (we.running_eff * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if we.get('processing_eff', 0) and we.processing_eff < 0.8 %}warn{% endif %}">{% if we.get('processing_eff', 0) %}{{ (we.processing_eff * 100)|round(1) }}%{% endif %}</td>
       <td>{{ we.get('cpu_hours', 0)|fmt }}</td>
     </tr>
     {% endif %}

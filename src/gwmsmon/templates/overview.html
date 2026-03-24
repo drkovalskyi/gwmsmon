@@ -186,8 +186,8 @@
       <td>{{ wfc.get('total', 0)|fmt }}</td>
       <td>{{ wfc.get('failures', 0)|fmt }}</td>
       <td class="{% if wfc.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.failure_rate * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if wfc.get('running_eff', 0) and wfc.running_eff < 0.5 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.get('running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if wfc.get('processing_eff', 0) and wfc.processing_eff < 0.8 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.get('processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if wfc.get('running_eff', 0) and wfc.running_eff < 0.5 %}warn{% endif %}">{% if wfc.get('running_eff', 0) %}{{ (wfc.running_eff * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if wfc.get('processing_eff', 0) and wfc.processing_eff < 0.8 %}warn{% endif %}">{% if wfc.get('processing_eff', 0) %}{{ (wfc.processing_eff * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     {% endif %}
@@ -230,8 +230,8 @@
       <td>{{ sec.get('total', 0)|fmt }}</td>
       <td>{{ sec.get('failures', 0)|fmt }}</td>
       <td class="{% if sec.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.failure_rate * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if seff.get('running_eff', 0) and seff.running_eff < 0.5 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (seff.get('running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
-      <td class="{% if seff.get('processing_eff', 0) and seff.processing_eff < 0.8 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (seff.get('processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if seff.get('running_eff', 0) and seff.running_eff < 0.5 %}warn{% endif %}">{% if seff.get('running_eff', 0) %}{{ (seff.running_eff * 100)|round(1) }}%{% endif %}</td>
+      <td class="{% if seff.get('processing_eff', 0) and seff.processing_eff < 0.8 %}warn{% endif %}">{% if seff.get('processing_eff', 0) %}{{ (seff.processing_eff * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     </tbody>

@@ -40,7 +40,7 @@
       <td>{{ job.get('cmssw_events', 0)|fmt }}</td>
       <td>{% if job.get('cmssw_done') %}yes{% elif job.get('cmssw_time', 0) %}no{% endif %}</td>
       <td title="{{ job.get('task', '') }}">{{ job.get('task', '').rsplit('/', 1)[-1] }}</td>
-      <td>{% if job.log_url %}<a href="{{ job.log_url }}" target="_blank" rel="noopener">tar.gz</a>{% endif %}</td>
+      <td>{% if job.has_log %}<a href="/{{ view }}/site/{{ site_name }}/failed/{{ request_name }}/log/{{ job.jobid }}">logs</a>{% endif %}</td>
     </tr>
     {% endfor %}
     </tbody>

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Logs — Job {{ jobid }} — gwmsmon{% endblock %}
+{% block content %}
+<h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / <a href="/{{ view }}/site/{{ site_name }}">{{ site_name }}</a> / <a href="/{{ view }}/site/{{ site_name }}/failed/{{ request_name }}">Failed Jobs</a> / Job {{ jobid }}</h1>
+<p>Request: <a href="/{{ view }}/request/{{ request_name }}">{{ request_name }}</a></p>
+
+{% if members %}
+<details class="section" open>
+  <summary><h2>Log Files ({{ members|length }})</h2></summary>
+  <table class="data-table compact">
+    <thead><tr>
+      <th>File</th>
+      <th data-sort="num">Size</th>
+    </tr></thead>
+    <tbody>
+    {% for m in members %}
+    <tr>
+      <td><a href="/{{ view }}/site/{{ site_name }}/failed/{{ request_name }}/log/{{ jobid }}/{{ m.name }}">{{ m.name }}</a></td>
+      <td>{% if m.size >= 1048576 %}{{ (m.size / 1048576)|round(1) }} MB{% elif m.size >= 1024 %}{{ (m.size / 1024)|round(1) }} KB{% else %}{{ m.size }} B{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% else %}
+<p>No files found in log tarball.</p>
+{% endif %}
+{% endblock %}

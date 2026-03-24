@@ -569,9 +569,14 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             updated_ts=updated,
         )
 
-    EOS_LOG_URL = ("https://eoscms.cern.ch/eos/cms/store/logs/prod"
-                    "/recent/PRODUCTION")
     EOS_LOG_PATH = "/eos/cms/store/logs/prod/recent/PRODUCTION"
+
+    def _eos_tarball_path(request, task, schedd, jobid, retry):
+        """Construct EOS FUSE path for a job log tarball."""
+        task_short = task.rsplit("/", 1)[-1] if task else ""
+        filename = f"{schedd}-{jobid}-{retry}-log.tar.gz"
+        return (f"{EOS_LOG_PATH}/{request}/{task_short}/{filename}",
+                task_short)
 
     @app.route("/<view>/site/<site_name>/failed/<path:request>")
     def failed_jobs(view, site_name, request):
@@ -583,20 +588,12 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             os.path.join(basedir, "_sites"),
             f"{safe_site}_failed_jobs.json")
         jobs = data.get("requests", {}).get(request, [])
-        # Build log URLs, check file existence on EOS FUSE mount
         for job in jobs:
-            task = job.get("task", "")
-            task_short = task.rsplit("/", 1)[-1] if task else ""
-            schedd = job.get("schedd", "")
-            jobid = job.get("jobid", 0)
-            retry = job.get("retry", 0)
-            filename = f"{schedd}-{jobid}-{retry}-log.tar.gz"
-            eos_path = f"{EOS_LOG_PATH}/{request}/{task_short}/{filename}"
-            if os.path.exists(eos_path):
-                job["log_url"] = (
-                    f"{EOS_LOG_URL}/{request}/{task_short}/{filename}")
-            else:
-                job["log_url"] = ""
+            eos_path, _ = _eos_tarball_path(
+                request, job.get("task", ""),
+                job.get("schedd", ""), job.get("jobid", 0),
+                job.get("retry", 0))
+            job["has_log"] = os.path.exists(eos_path)
             job["desc"] = _describe_exit_code(str(job.get("code", "")))
 
         summary = _load_json(basedir, "summary.json")
@@ -612,6 +609,101 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             freshness=_freshness(updated),
             updated_ts=updated,
         )
+
+    @app.route("/<view>/site/<site_name>/failed/<path:request>"
+                "/log/<int:jobid>")
+    def log_list(view, site_name, request, jobid):
+        """List files inside a job's log tarball."""
+        if view not in VIEWS:
+            abort(404)
+        basedir = cfg.get(view, "basedir")
+        safe_site = site_name.replace("/", "_")
+        data = _load_json(
+            os.path.join(basedir, "_sites"),
+            f"{safe_site}_failed_jobs.json")
+        # Find the job record to get task/schedd/retry
+        job = None
+        for j in data.get("requests", {}).get(request, []):
+            if j.get("jobid") == jobid:
+                job = j
+                break
+        if not job:
+            abort(404)
+        eos_path, _ = _eos_tarball_path(
+            request, job.get("task", ""),
+            job.get("schedd", ""), jobid, job.get("retry", 0))
+        if not os.path.exists(eos_path):
+            abort(404)
+        import tarfile
+        try:
+            with tarfile.open(eos_path, "r:gz") as tar:
+                members = []
+                for m in tar.getmembers():
+                    if m.isfile():
+                        members.append({
+                            "name": m.name,
+                            "size": m.size,
+                        })
+        except (tarfile.TarError, OSError):
+            abort(404)
+        members.sort(key=lambda x: x["name"])
+        summary = _load_json(basedir, "summary.json")
+        updated = summary.get("updated", 0)
+        return render_template(
+            "log_viewer.html",
+            view=view,
+            view_cfg=VIEWS[view],
+            site_name=site_name,
+            request_name=request,
+            jobid=jobid,
+            members=members,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
+
+    @app.route("/<view>/site/<site_name>/failed/<path:request>"
+                "/log/<int:jobid>/<path:filepath>")
+    def log_file(view, site_name, request, jobid, filepath):
+        """Serve a single file from a job's log tarball."""
+        if view not in VIEWS:
+            abort(404)
+        if ".." in filepath:
+            abort(400)
+        basedir = cfg.get(view, "basedir")
+        safe_site = site_name.replace("/", "_")
+        data = _load_json(
+            os.path.join(basedir, "_sites"),
+            f"{safe_site}_failed_jobs.json")
+        job = None
+        for j in data.get("requests", {}).get(request, []):
+            if j.get("jobid") == jobid:
+                job = j
+                break
+        if not job:
+            abort(404)
+        eos_path, _ = _eos_tarball_path(
+            request, job.get("task", ""),
+            job.get("schedd", ""), jobid, job.get("retry", 0))
+        if not os.path.exists(eos_path):
+            abort(404)
+        import tarfile
+        from flask import Response
+        try:
+            with tarfile.open(eos_path, "r:gz") as tar:
+                member = tar.getmember(filepath)
+                if not member.isfile():
+                    abort(404)
+                f = tar.extractfile(member)
+                content = f.read()
+        except (tarfile.TarError, KeyError, OSError):
+            abort(404)
+        # Determine content type
+        ext = filepath.rsplit(".", 1)[-1].lower() if "." in filepath else ""
+        ct = {"xml": "text/xml", "html": "text/html",
+              "json": "application/json"}.get(ext, "text/plain")
+        return Response(content, mimetype=ct,
+                        headers={"Content-Disposition": "inline"})
 
     @app.route("/<view>/completed")
     def completed_overview(view):

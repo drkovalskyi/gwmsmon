@@ -517,23 +517,29 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     return {data: data, tMin: timestamps[0], tMax: timestamps[timestamps.length - 1]};
   }
 
-  // Extend aligned data to xMax by repeating last value for each series
-  function extendToNow(aligned, xMax) {
+  // Extend aligned data to fill [xMin, xMax] range
+  function extendToEdges(aligned, xMin, xMax) {
     if (!aligned || !aligned.data.length) return aligned;
     var ts = aligned.data[0];
-    var lastT = ts[ts.length - 1];
-    if (lastT >= xMax) return aligned;
-    var newData = [new Float64Array(ts.length + 1)];
-    newData[0].set(ts);
-    newData[0][ts.length] = xMax;
+    var n = ts.length;
+    var addLeft = ts[0] > xMin ? 1 : 0;
+    var addRight = ts[n - 1] < xMax ? 1 : 0;
+    if (!addLeft && !addRight) return aligned;
+    var newLen = n + addLeft + addRight;
+    var newData = [new Float64Array(newLen)];
+    if (addLeft) newData[0][0] = xMin;
+    for (var j = 0; j < n; j++) newData[0][addLeft + j] = ts[j];
+    if (addRight) newData[0][newLen - 1] = xMax;
     for (var i = 1; i < aligned.data.length; i++) {
       var s = aligned.data[i];
-      var ns = new Float64Array(s.length + 1);
-      ns.set(s);
-      ns[s.length] = s[s.length - 1]; // repeat last value
+      var ns = new Float64Array(newLen);
+      if (addLeft) ns[0] = s[0]; // repeat first value
+      for (var j = 0; j < n; j++) ns[addLeft + j] = s[j];
+      if (addRight) ns[newLen - 1] = s[n - 1]; // repeat last value
       newData.push(ns);
     }
     aligned.data = newData;
+    aligned.tMin = xMin;
     aligned.tMax = xMax;
     return aligned;
   }
@@ -760,7 +766,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var aligned = buildAligned(series, seriesKeys, xMin);
     if (!aligned) return;
     if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
-    extendToNow(aligned, xMax);
+    extendToEdges(aligned, xMin, xMax);
 
     var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
     var yMax = sharedSimpleYMax || alignedCpusMax(1);
@@ -920,7 +926,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     });
     var timestamps = Object.keys(tSet).map(Number).sort(function(a,b){return a-b;});
     if (!timestamps.length) return;
-    // Extend to xMax so lines reach the right edge
+    // Extend to edges so lines fill the chart
+    if (timestamps[0] > xMin) timestamps.unshift(xMin);
     if (timestamps[timestamps.length - 1] < xMax) timestamps.push(xMax);
 
     // Build per-block raw value arrays aligned to timestamps
@@ -1185,7 +1192,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       var aligned = buildAligned(series, keys, xMin);
       if (!aligned) return;
       if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
-      extendToNow(aligned, xMax);
+      extendToEdges(aligned, xMin, xMax);
 
       var timestamps = aligned.data[0];
       var cpusArr = aligned.data[1];

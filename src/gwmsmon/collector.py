@@ -13,6 +13,7 @@ import time
 from gwmsmon import config
 from gwmsmon.query import query_all, query_history_parallel, query_accounting_ads
 from gwmsmon.state import State
+from gwmsmon.status_history import StatusHistory
 
 log = logging.getLogger("gwmsmon")
 
@@ -67,6 +68,8 @@ def main():
     cfg = config.load(args.config)
     state = State()
     state.restore(cfg)
+    status_history = StatusHistory()
+    status_history.restore(cfg.get("prodview", "basedir"))
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
@@ -149,6 +152,16 @@ def main():
                 }, f)
         except OSError:
             pass
+
+        # Record status metrics for history charts
+        state_path = os.path.join(
+            cfg.get("globalview", "basedir"), "exit_code_state.json")
+        try:
+            state_size_mb = round(os.path.getsize(state_path) / 1024 / 1024, 1)
+        except OSError:
+            state_size_mb = 0
+        status_history.record(round(elapsed, 1), round(rss_mb), state_size_mb)
+        status_history.flush(cfg.get("prodview", "basedir"))
 
         if args.once:
             break

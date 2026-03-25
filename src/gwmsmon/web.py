@@ -167,6 +167,15 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             updated_ts=updated,
         )
 
+    @app.route("/status/history.json")
+    def status_history():
+        basedir = cfg.get("prodview", "basedir")
+        data = _load_json(basedir, "status_history.json")
+        from flask import jsonify
+        resp = jsonify(data)
+        resp.headers["Cache-Control"] = "max-age=60, public"
+        return resp
+
     @app.route("/<view>/sites")
     def site_monitor(view):
         if view not in VIEWS or VIEWS[view].get("overview_only"):

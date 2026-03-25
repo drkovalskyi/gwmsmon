@@ -8,7 +8,7 @@
   <tbody>
   <tr><td style="font-weight:600">Cycle</td><td>{{ status.get('cycle', '?') }}</td></tr>
   <tr><td style="font-weight:600">Cycle Time</td><td>{{ status.get('cycle_time', '?') }}s</td></tr>
-  <tr><td style="font-weight:600">RSS Memory</td><td>{{ status.get('rss_mb', '?') }} MB</td></tr>
+  <tr><td style="font-weight:600">RSS Memory</td><td>{{ "%.1f"|format(status.get('rss_mb', 0) / 1024) }} GB</td></tr>
   <tr><td style="font-weight:600">State File</td><td>{{ state_size_mb }} MB</td></tr>
   <tr><td style="font-weight:600">Timeseries Entities</td><td>{{ status.get('ts_entities', 0)|fmt }}</td></tr>
   <tr><td style="font-weight:600">Timeseries Points</td><td>{{ status.get('ts_points', 0)|fmt }}</td></tr>
@@ -20,4 +20,25 @@
 {% else %}
 <p>No status data available yet.</p>
 {% endif %}
+
+<h2>Cycle Time (s)</h2>
+<div class="graphs-row">
+  <div class="chart" data-src="/status/history.json" data-chart-type="status-metric" data-metric="cycle_time" data-interval="24h"></div>
+  <div class="chart" data-src="/status/history.json" data-chart-type="status-metric" data-metric="cycle_time" data-interval="7d"></div>
+  <div class="chart" data-src="/status/history.json" data-chart-type="status-metric" data-metric="cycle_time" data-interval="1y"></div>
+</div>
+
+<h2>RSS Memory (GB)</h2>
+<div class="graphs-row">
+  <div class="chart" data-src="/status/history.json" data-chart-type="status-metric" data-metric="rss_mb" data-interval="24h"></div>
+  <div class="chart" data-src="/status/history.json" data-chart-type="status-metric" data-metric="rss_mb" data-interval="7d"></div>
+  <div class="chart" data-src="/status/history.json" data-chart-type="status-metric" data-metric="rss_mb" data-interval="1y"></div>
+</div>
+
+<h2>State File (MB)</h2>
+<div class="graphs-row">
+  <div class="chart" data-src="/status/history.json" data-chart-type="status-metric" data-metric="state_size_mb" data-interval="24h"></div>
+  <div class="chart" data-src="/status/history.json" data-chart-type="status-metric" data-metric="state_size_mb" data-interval="7d"></div>
+  <div class="chart" data-src="/status/history.json" data-chart-type="status-metric" data-metric="state_size_mb" data-interval="1y"></div>
+</div>
 {% endblock %}

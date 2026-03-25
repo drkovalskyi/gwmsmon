@@ -517,29 +517,27 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     return {data: data, tMin: timestamps[0], tMax: timestamps[timestamps.length - 1]};
   }
 
-  // Extend aligned data to fill [xMin, xMax] range
+  // Extend aligned data to fill right edge (repeat last value to xMax).
+  // Left edge is never padded — lines start where real data begins.
   function extendToEdges(aligned, xMin, xMax) {
     if (!aligned || !aligned.data.length) return aligned;
     var ts = aligned.data[0];
     var n = ts.length;
-    var addLeft = ts[0] > xMin ? 1 : 0;
     var addRight = ts[n - 1] < xMax ? 1 : 0;
-    if (!addLeft && !addRight) return aligned;
-    var newLen = n + addLeft + addRight;
+    if (!addRight) return aligned;
+    var newLen = n + 1;
     var newData = [new Float64Array(newLen)];
-    if (addLeft) newData[0][0] = xMin;
-    for (var j = 0; j < n; j++) newData[0][addLeft + j] = ts[j];
-    if (addRight) newData[0][newLen - 1] = xMax;
+    for (var j = 0; j < n; j++) newData[0][j] = ts[j];
+    newData[0][n] = xMax;
     for (var i = 1; i < aligned.data.length; i++) {
       var s = aligned.data[i];
       var ns = new Float64Array(newLen);
-      if (addLeft) ns[0] = s[0]; // repeat first value
-      for (var j = 0; j < n; j++) ns[addLeft + j] = s[j];
-      if (addRight) ns[newLen - 1] = s[n - 1]; // repeat last value
+      for (var j = 0; j < n; j++) ns[j] = s[j];
+      ns[n] = s[n - 1]; // repeat last value
       newData.push(ns);
     }
     aligned.data = newData;
-    aligned.tMin = xMin;
+    aligned.tMin = aligned.tMin;
     aligned.tMax = xMax;
     return aligned;
   }
@@ -811,6 +809,93 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     };
 
     new uPlot(opts, dataArrays, el);
+  }
+
+  // Status metric chart: single line per metric with tier-based interval
+  var STATUS_INTERVALS = {'24h': 24*3600, '7d': 7*86400, '1y': 365*86400};
+  var STATUS_LABELS = {'24h': '24 Hours', '7d': '7 Days', '1y': '1 Year'};
+
+  function renderStatusMetricChart(el, data) {
+    var metric = el.dataset.metric;
+    var tier = el.dataset.interval;
+    var interval = STATUS_INTERVALS[tier];
+    if (!interval || !metric) return;
+
+    var pts = (data[metric] || {})[tier];
+    if (!pts || !pts.t || !pts.t.length) {
+      el.innerHTML = '<div style="text-align:center;font-size:11px;color:' + AXIS_LABEL_STROKE + ';padding:8px 0">' + STATUS_LABELS[tier] + '</div><div style="text-align:center;font-size:11px;color:#999;padding:40px 0">No data</div>';
+      return;
+    }
+
+    var loader = el.querySelector('.chart-loading');
+    if (loader) loader.remove();
+
+    var label = document.createElement('div');
+    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:' + AXIS_LABEL_STROKE + ';padding:2px 0 0';
+    label.textContent = STATUS_LABELS[tier] || tier;
+    el.appendChild(label);
+
+    var xMax = Math.floor(Date.now() / 1000);
+    var xMin = xMax - interval;
+
+    // Build aligned series from tier data; convert rss_mb to GB
+    var srcPts = pts;
+    if (metric === 'rss_mb') {
+      srcPts = {t: pts.t, v: pts.v.map(function(v) { return v / 1024; })};
+    }
+    var series = {};
+    series[metric] = srcPts;
+    var aligned = buildAligned(series, [metric], xMin);
+    if (!aligned) return;
+    extendToEdges(aligned, xMin, xMax);
+
+    var timestamps = aligned.data[0];
+    var values = aligned.data[1];
+
+    // Compute y-max
+    var maxV = 0;
+    for (var i = 0; i < values.length; i++) {
+      if (!isNaN(values[i]) && values[i] > maxV) maxV = values[i];
+    }
+    var yMax = alignedCpusMax(maxV);
+
+    var xFmt = tier === '1y' ? fmtDateSplits : (tier === '7d' ? fmtDateSplits : fmtTimeSplits);
+
+    var opts = {
+      width: CHART_W,
+      height: SIMPLE_CHART_H,
+      cursor: { show: true },
+      legend: { show: false },
+      padding: [10, 8, 2, LEFT_PAD],
+      plugins: [tooltipPlugin()],
+      scales: {
+        x: { min: xMin, max: xMax },
+        y: { min: 0, max: yMax, auto: false },
+      },
+      axes: [
+        { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE },
+        {
+          scale: 'y',
+          size: 50,
+          font: '10px sans-serif',
+          stroke: AXIS_LABEL_STROKE,
+          ticks: { size: 0 },
+          splits: gridSplits,
+          values: function(self, ticks) { return ticks.map(fmtCount); },
+        },
+      ],
+      series: [
+        {},
+        {
+          scale: 'y',
+          stroke: CPUS_COLOR,
+          width: 2,
+          label: metric,
+        },
+      ],
+    };
+
+    new uPlot(opts, [timestamps, values], el);
   }
 
   // Histogram height matches dual-panel total: PANEL_TOP_H + GAP_H + PANEL_BOT_H
@@ -1224,6 +1309,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         stackedCharts.push(el);
       } else if (el.dataset.chartType === 'site-monitor') {
         simpleCharts.push(el); // group for fetching, render differently
+      } else if (el.dataset.chartType === 'status-metric') {
+        // handled separately — uses rawData
       } else {
         dualCharts.push(el);
       }
@@ -1316,6 +1403,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
                   if (allData[s]) renderSimpleChart(el, allData[s], sharedSimpleYMax);
                 } else if (el.dataset.chartType === 'stacked') {
                   if (rawData[s]) renderStackedChart(el, rawData[s], el.dataset.stackedMetric, el.dataset.stackedLabel || '');
+                } else if (el.dataset.chartType === 'status-metric') {
+                  if (rawData[s]) renderStatusMetricChart(el, rawData[s]);
                 } else {
                   if (allData[s]) renderChartWithSharedScale(el, allData[s], sharedRatioYMax, sharedCpusYMax);
                 }

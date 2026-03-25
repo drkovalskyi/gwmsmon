@@ -859,7 +859,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var xMax = ts[ts.length - 1] + bucketSize;
     var xMin = xMax - 7 * 86400;
 
-    var barOpts = uPlot.paths.bars({size: [1, 100]});
+    var stepPaths = uPlot.paths.stepped({align: 1});
 
     var opts = {
       width: CHART_W,
@@ -888,19 +888,19 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         {},
         {
           scale: 'y',
-          stroke: SUCCESS_COLOR,
+          stroke: isDark ? '#2050A0' : '#1A4FA0',
           fill: SUCCESS_COLOR,
-          width: 0,
+          width: 1.5,
           label: 'Success',
-          paths: barOpts,
+          paths: stepPaths,
         },
         {
           scale: 'y',
-          stroke: FAILURE_COLOR,
+          stroke: isDark ? '#CC6000' : '#B04000',
           fill: FAILURE_COLOR,
-          width: 0,
+          width: 1.5,
           label: 'Failure',
-          paths: barOpts,
+          paths: stepPaths,
         },
       ],
     };

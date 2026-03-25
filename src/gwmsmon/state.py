@@ -119,6 +119,9 @@ class State:
         t0 = time.time()
         snap = self._empty_snapshot()
 
+        # Per-site CPU breakdown by accounting category
+        site_cpus_cat = {}  # {site: {tier0, production, analysis, other}}
+
         for job in jobs:
             status = job.get("JobStatus")
             cpus = job.get("RequestCpus", 1) or 1
@@ -131,6 +134,22 @@ class State:
             # Only Idle (1) and Running (2) for prodview/analysisview
             if status not in (1, 2):
                 continue
+
+            # Track per-site per-category CPUs for running jobs
+            if status == 2:
+                site = job.get("MATCH_GLIDEIN_CMSSite")
+                if site:
+                    sc = site_cpus_cat.setdefault(
+                        site, {"tier0": 0, "production": 0,
+                               "analysis": 0, "other": 0})
+                    if schedd_type == "tier0schedd":
+                        sc["tier0"] += cpus
+                    elif schedd_type == "prodschedd":
+                        sc["production"] += cpus
+                    elif schedd_type == "crabschedd":
+                        sc["analysis"] += cpus
+                    else:
+                        sc["other"] += cpus
 
             # --- prodview: jobs with WMAgent_RequestName ---
             request = job.get("WMAgent_RequestName")
@@ -145,6 +164,8 @@ class State:
                     self._aggregate_analysisview(snap["analysisview"], job,
                                                  status, cpus, user,
                                                  schedd_name)
+
+        snap["_site_cpus_cat"] = site_cpus_cat
 
         # Copy fairshare from globalview → poolview (single source of truth)
         snap["poolview"]["fairshare"] = snap["globalview"]["fairshare"]
@@ -1646,21 +1667,16 @@ class State:
                 for k in req_totals:
                     req_totals[k] += summary.get(k, 0)
             self._ts_append("prodview", f"request:{req}", req_totals, now)
-        # Per-site CPU breakdown by category
-        prod_sites = snap["prodview"].get("sites", {})
-        ana_sites = snap["analysisview"].get("sites", {})
-        gv_sites = snap["globalview"].get("sites", {})
-        all_site_names = set(prod_sites) | set(ana_sites) | set(gv_sites)
-        for site in all_site_names:
-            prod_cpus = prod_sites.get(site, {}).get("CpusInUse", 0)
-            ana_cpus = ana_sites.get(site, {}).get("CpusInUse", 0)
-            total_cpus = gv_sites.get(site, {}).get("CpusInUse", 0)
-            other_cpus = max(0, total_cpus - prod_cpus - ana_cpus)
+        # Per-site CPU breakdown by accounting category
+        site_cpus_cat = snap.get("_site_cpus_cat", {})
+        for site, cats in site_cpus_cat.items():
             self._ts_append("prodview", f"site:{site}", {
-                "CpusProd": prod_cpus,
-                "CpusAna": ana_cpus,
-                "CpusOther": other_cpus,
+                "CpusTier0": cats.get("tier0", 0),
+                "CpusProd": cats.get("production", 0),
+                "CpusAna": cats.get("analysis", 0),
+                "CpusOther": cats.get("other", 0),
             }, now)
+        prod_sites = snap["prodview"].get("sites", {})
         for site, counts in prod_sites.items():
             self._ts_append("prodview", f"site:{site}", counts, now)
         # Per-site failure rate and efficiency (1h window)

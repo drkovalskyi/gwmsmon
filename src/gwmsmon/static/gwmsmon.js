@@ -1057,7 +1057,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var xMax = Math.floor(Date.now() / 1000);
     var xMin = xMax - interval;
 
-    var cpusKeys = ['CpusProd', 'CpusAna', 'CpusOther'];
+    var cpusKeys = ['CpusTier0', 'CpusProd', 'CpusAna', 'CpusOther'];
     var pctKeys = ['FailureRate', 'CPUEff', 'ProcEff'];
     var allKeys = cpusKeys.concat(pctKeys);
 
@@ -1066,30 +1066,33 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     aligned = downsampleAligned(aligned, 3600);
     extendToEdges(aligned, xMin, xMax);
 
-    // Stack CPU series: other(bottom) + analysis(mid) + production(top)
-    // Data order: [ts, CpusProd, CpusAna, CpusOther, FailRate, CPUEff, ProcEff]
+    // Stack: other(bottom) + analysis + production + tier0(top)
+    // Data order: [ts, Tier0, Prod, Ana, Other, FailRate, CPUEff, ProcEff]
     var n = aligned.data[0].length;
-    var prod = aligned.data[1];   // CpusProd
-    var ana = aligned.data[2];    // CpusAna
-    var other = aligned.data[3];  // CpusOther
-    // Cumulative stacks for uPlot (painted bottom-up, last series on top)
+    var tier0 = aligned.data[1];
+    var prod = aligned.data[2];
+    var ana = aligned.data[3];
+    var other = aligned.data[4];
     var cumOther = new Float64Array(n);
     var cumAna = new Float64Array(n);
     var cumProd = new Float64Array(n);
+    var cumTier0 = new Float64Array(n);
     var cpusMax = 1;
     for (var i = 0; i < n; i++) {
       cumOther[i] = (other[i] || 0);
       cumAna[i] = cumOther[i] + (ana[i] || 0);
       cumProd[i] = cumAna[i] + (prod[i] || 0);
-      if (cumProd[i] > cpusMax) cpusMax = cumProd[i];
+      cumTier0[i] = cumProd[i] + (tier0[i] || 0);
+      if (cumTier0[i] > cpusMax) cpusMax = cumTier0[i];
     }
-    // Replace data arrays with cumulative
-    aligned.data[1] = cumProd;   // production on top
-    aligned.data[2] = cumAna;    // analysis middle
-    aligned.data[3] = cumOther;  // other bottom
+    aligned.data[1] = cumTier0;  // tier0 on top
+    aligned.data[2] = cumProd;   // production
+    aligned.data[3] = cumAna;    // analysis
+    aligned.data[4] = cumOther;  // other bottom
 
     var yMaxCpus = alignedCpusMax(cpusMax);
 
+    var TIER0_COLOR = '#E6A586';
     var PROD_COLOR = '#9EB8E2';
     var ANA_COLOR = '#D9C68A';
     var OTHER_COLOR = '#A0BF9C';
@@ -1134,6 +1137,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       ],
       series: [
         {},
+        { scale: 'cpus', stroke: TIER0_COLOR, fill: TIER0_COLOR + '99', width: 0, label: 'Tier0' },
         { scale: 'cpus', stroke: PROD_COLOR, fill: PROD_COLOR + '99', width: 0, label: 'Production' },
         { scale: 'cpus', stroke: ANA_COLOR, fill: ANA_COLOR + '99', width: 0, label: 'Analysis' },
         { scale: 'cpus', stroke: OTHER_COLOR, fill: OTHER_COLOR + '99', width: 0, label: 'Other' },

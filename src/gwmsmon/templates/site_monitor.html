@@ -5,7 +5,7 @@
 <input type="text" id="site-filter" placeholder="Filter sites..." style="margin-bottom:12px;padding:6px 10px;width:300px;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--text)">
 <div id="site-charts">
 {% for site in site_names %}
-<div class="site-chart-row" data-site="{{ site }}" style="display:none">
+<div class="site-chart-row" data-site="{{ site }}">
   <h3 style="margin:8px 0 4px"><a href="/{{ view }}/site/{{ site }}">{{ site }}</a></h3>
   <div class="graphs-row">
     <div class="chart" data-src="/{{ view }}/tsdata/site/{{ site }}" data-chart-type="site-monitor" data-interval="weekly"></div>
@@ -35,7 +35,7 @@
     });
   }
   filter.addEventListener('input', apply);
-  // Show nothing initially — user must type to filter
+  apply();
 })();
 </script>
 {% endblock %}

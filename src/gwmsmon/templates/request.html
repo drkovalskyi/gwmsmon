@@ -234,7 +234,7 @@
     <tbody>
     {% for st_name, st_data in subtasks.items() if not st_name.startswith('_') %}
     <tr>
-      <td title="{{ st_name }}">{{ st_name.replace(name + '/', '') if st_name.startswith(name) else st_name }}</td>
+      <td title="{{ st_name }}">{{ st_name.replace('/' + name + '/', '') if ('/' + name + '/') in st_name else st_name }}</td>
       <td>{{ st_data.get('_prio', '')|fmt }}</td>
       <td>{{ st_data.get('Running', 0)|fmt }}</td>
       <td>{{ st_data.get('MatchingIdle', 0)|fmt }}</td>

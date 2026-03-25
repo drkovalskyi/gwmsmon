@@ -177,7 +177,8 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         # Remove non-site keys
         site_names = sorted(
             [s for s in sites if not s.startswith("_")
-             and isinstance(sites[s], dict)])
+             and isinstance(sites[s], dict)],
+            key=lambda s: -sites[s].get("CpusInUse", 0))
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
         return render_template(

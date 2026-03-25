@@ -3,13 +3,11 @@
 {% block content %}
 <h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / Site Monitor</h1>
 <input type="text" id="site-filter" placeholder="Filter sites..." style="margin-bottom:12px;padding:6px 10px;width:300px;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--text)">
-<div id="site-charts">
+<div id="site-charts" style="display:flex;flex-wrap:wrap;gap:8px">
 {% for site in site_names %}
 <div class="site-chart-row" data-site="{{ site }}">
-  <h3 style="margin:8px 0 4px"><a href="/{{ view }}/site/{{ site }}">{{ site }}</a></h3>
-  <div class="graphs-row">
-    <div class="chart" data-src="/{{ view }}/tsdata/site/{{ site }}" data-chart-type="site-monitor" data-interval="weekly"></div>
-  </div>
+  <div style="font-size:12px;font-weight:600;text-align:center;padding:2px 0"><a href="/{{ view }}/site/{{ site }}">{{ site }}</a></div>
+  <div class="chart" data-src="/{{ view }}/tsdata/site/{{ site }}" data-chart-type="site-monitor" data-interval="weekly"></div>
 </div>
 {% endfor %}
 </div>
@@ -19,23 +17,11 @@
   var rows = document.querySelectorAll('.site-chart-row');
   function apply() {
     var q = filter.value.toLowerCase();
-    var shown = 0;
     rows.forEach(function(r) {
-      var match = !q || r.dataset.site.toLowerCase().indexOf(q) !== -1;
-      r.style.display = match ? '' : 'none';
-      if (match) shown++;
-    });
-    // Limit to 20 visible to avoid overload
-    var count = 0;
-    rows.forEach(function(r) {
-      if (r.style.display !== 'none') {
-        count++;
-        if (count > 20) r.style.display = 'none';
-      }
+      r.style.display = (!q || r.dataset.site.toLowerCase().indexOf(q) !== -1) ? '' : 'none';
     });
   }
   filter.addEventListener('input', apply);
-  apply();
 })();
 </script>
 {% endblock %}

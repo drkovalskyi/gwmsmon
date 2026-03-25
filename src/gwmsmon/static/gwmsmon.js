@@ -1048,6 +1048,84 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     new uPlot(opts, data, el);
   }
 
+  // Site monitor chart: CpusInUse (left) + FailureRate/CPUEff/ProcEff % (right)
+  function renderSiteMonitorChart(el, series) {
+    var interval = 7 * 24 * 3600; // always 7 days
+    var loader = el.querySelector('.chart-loading');
+    if (loader) loader.remove();
+
+    var xMax = Math.floor(Date.now() / 1000);
+    var xMin = xMax - interval;
+
+    var cpusKeys = ['CpusInUse'];
+    var pctKeys = ['FailureRate', 'CPUEff', 'ProcEff'];
+    var allKeys = cpusKeys.concat(pctKeys);
+
+    var aligned = buildAligned(series, allKeys, xMin);
+    if (!aligned) return;
+    aligned = downsampleAligned(aligned, 3600);
+    extendToEdges(aligned, xMin, xMax);
+
+    // Find max CPUs for left axis
+    var cpusMax = 1;
+    var cpusIdx = 1; // first series after timestamps
+    for (var i = 0; i < aligned.data[cpusIdx].length; i++) {
+      var v = aligned.data[cpusIdx][i];
+      if (v > cpusMax) cpusMax = v;
+    }
+    var yMaxCpus = alignedCpusMax(cpusMax);
+
+    var FAIL_COLOR = isDark ? '#FF6B6B' : '#D32F2F';
+    var CPUEFF_COLOR = isDark ? '#64B5F6' : '#1976D2';
+    var PROCEFF_COLOR = isDark ? '#81C784' : '#388E3C';
+
+    var opts = {
+      width: CHART_W,
+      height: SIMPLE_CHART_H,
+      cursor: { show: true },
+      legend: { show: false },
+      padding: [4, 8, 2, LEFT_PAD],
+      plugins: [tooltipPlugin()],
+      scales: {
+        x: { min: xMin, max: xMax },
+        cpus: { min: 0, max: yMaxCpus, auto: false },
+        pct: { min: 0, max: 100, auto: false },
+      },
+      axes: [
+        { size: XAXIS_H, font: '10px sans-serif', values: fmtDateSplits, stroke: AXIS_STROKE },
+        {
+          scale: 'cpus',
+          size: 50,
+          font: '10px sans-serif',
+          stroke: AXIS_LABEL_STROKE,
+          ticks: { size: 0 },
+          splits: gridSplits,
+          values: function(self, ticks) { return ticks.map(fmtCount); },
+        },
+        {
+          scale: 'pct',
+          side: 1,
+          size: 40,
+          font: '10px sans-serif',
+          stroke: AXIS_LABEL_STROKE,
+          ticks: { size: 0 },
+          splits: function() { return [0, 25, 50, 75, 100]; },
+          values: function(self, ticks) { return ticks.map(function(v) { return v + '%'; }); },
+          grid: { show: false },
+        },
+      ],
+      series: [
+        {},
+        { scale: 'cpus', stroke: CPUS_COLOR, width: 2, label: 'CPUs In Use' },
+        { scale: 'pct', stroke: FAIL_COLOR, width: 1.5, label: 'Failure %' },
+        { scale: 'pct', stroke: CPUEFF_COLOR, width: 1.5, label: 'CPU Eff %' },
+        { scale: 'pct', stroke: PROCEFF_COLOR, width: 1.5, label: 'Proc Eff %' },
+      ],
+    };
+
+    new uPlot(opts, aligned.data, el);
+  }
+
   function renderCharts() {
     var charts = document.querySelectorAll('.chart');
     if (!charts.length) return;
@@ -1065,6 +1143,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         histogramCharts.push(el);
       } else if (el.dataset.chartType === 'stacked') {
         stackedCharts.push(el);
+      } else if (el.dataset.chartType === 'site-monitor') {
+        simpleCharts.push(el); // group for fetching, render differently
       } else {
         dualCharts.push(el);
       }
@@ -1151,6 +1231,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
               groups[s].forEach(function(el) {
                 if (el.dataset.chartType === 'histogram') {
                   if (rawData[s]) renderHistogramChart(el, rawData[s]);
+                } else if (el.dataset.chartType === 'site-monitor') {
+                  if (allData[s]) renderSiteMonitorChart(el, allData[s]);
                 } else if (el.dataset.chartType === 'simple') {
                   if (allData[s]) renderSimpleChart(el, allData[s], sharedSimpleYMax);
                 } else if (el.dataset.chartType === 'stacked') {

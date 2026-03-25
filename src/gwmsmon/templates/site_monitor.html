@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Site Monitor — {{ view_cfg.title }} — gwmsmon{% endblock %}
+{% block content %}
+<h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / Site Monitor</h1>
+<input type="text" id="site-filter" placeholder="Filter sites..." style="margin-bottom:12px;padding:6px 10px;width:300px;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--text)">
+<div id="site-charts">
+{% for site in site_names %}
+<div class="site-chart-row" data-site="{{ site }}" style="display:none">
+  <h3 style="margin:8px 0 4px"><a href="/{{ view }}/site/{{ site }}">{{ site }}</a></h3>
+  <div class="graphs-row">
+    <div class="chart" data-src="/{{ view }}/tsdata/site/{{ site }}" data-chart-type="site-monitor" data-interval="weekly"></div>
+  </div>
+</div>
+{% endfor %}
+</div>
+<script>
+(function() {
+  var filter = document.getElementById('site-filter');
+  var rows = document.querySelectorAll('.site-chart-row');
+  function apply() {
+    var q = filter.value.toLowerCase();
+    var shown = 0;
+    rows.forEach(function(r) {
+      var match = !q || r.dataset.site.toLowerCase().indexOf(q) !== -1;
+      r.style.display = match ? '' : 'none';
+      if (match) shown++;
+    });
+    // Limit to 20 visible to avoid overload
+    var count = 0;
+    rows.forEach(function(r) {
+      if (r.style.display !== 'none') {
+        count++;
+        if (count > 20) r.style.display = 'none';
+      }
+    });
+  }
+  filter.addEventListener('input', apply);
+  // Show nothing initially — user must type to filter
+})();
+</script>
+{% endblock %}

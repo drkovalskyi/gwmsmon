@@ -15,6 +15,7 @@
   {% for v, vc in views.items() %}
   <a href="/{{ v }}/" class="{% if v == view %}active{% endif %}">{{ vc.title }}</a>
   {% endfor %}
+  <a href="/prodview/sites" style="font-size:11px">Sites</a>
   <button class="theme-toggle" id="theme-toggle-btn" title="Toggle dark mode">&#9789;</button>
   <a href="/status" class="freshness" data-updated="{{ updated_ts }}" style="text-decoration:none">{{ freshness }}</a>
 </nav>

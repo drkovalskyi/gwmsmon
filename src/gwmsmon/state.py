@@ -1648,6 +1648,34 @@ class State:
             self._ts_append("prodview", f"request:{req}", req_totals, now)
         for site, counts in snap["prodview"]["sites"].items():
             self._ts_append("prodview", f"site:{site}", counts, now)
+        # Per-site failure rate and efficiency (1h window)
+        cutoff_1h = now - EXIT_CODE_WINDOWS["1h"]
+        for site in snap["prodview"]["sites"]:
+            total = failures = 0
+            cpu = wall_cpus = slot_ok = slot_all = 0
+            for wf_sites in self.exit_codes_by_site.get("prodview", {}).values():
+                buckets = wf_sites.get(site, {})
+                for ts, codes in buckets.items():
+                    if ts < cutoff_1h:
+                        continue
+                    for code, cnt in codes.items():
+                        total += cnt
+                        if code != "0":
+                            failures += cnt
+            for wf_sites in self.efficiency_by_site.get("prodview", {}).values():
+                buckets = wf_sites.get(site, {})
+                for ts, b in buckets.items():
+                    if ts < cutoff_1h:
+                        continue
+                    cpu += b.get("cpu", 0)
+                    wall_cpus += b.get("wall_cpus", 0)
+                    slot_ok += b.get("slot_ok", 0)
+                    slot_all += b.get("slot_all", 0)
+            self._ts_append("prodview", f"site:{site}", {
+                "FailureRate": round(failures / total * 100, 1) if total else 0,
+                "CPUEff": round(cpu / wall_cpus * 100, 1) if wall_cpus else 0,
+                "ProcEff": round(slot_ok / slot_all * 100, 1) if slot_all else 0,
+            }, now)
         for block, counts in snap["prodview"]["priorities"].items():
             self._ts_append("prodview", f"priority:{block}", counts, now)
 

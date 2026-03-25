@@ -167,6 +167,29 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             updated_ts=updated,
         )
 
+    @app.route("/<view>/sites")
+    def site_monitor(view):
+        if view not in VIEWS or VIEWS[view].get("overview_only"):
+            abort(404)
+        basedir = cfg.get(view, "basedir")
+        site_summary = _load_json(basedir, "site_summary.json")
+        sites = site_summary.get("sites") or site_summary
+        # Remove non-site keys
+        site_names = sorted(
+            [s for s in sites if not s.startswith("_")
+             and isinstance(sites[s], dict)])
+        summary = _load_json(basedir, "summary.json")
+        updated = summary.get("updated", 0)
+        return render_template(
+            "site_monitor.html",
+            view=view,
+            view_cfg=VIEWS[view],
+            site_names=site_names,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
+
     @app.route("/")
     def index():
         return redirect(url_for("overview", view="prodview"))

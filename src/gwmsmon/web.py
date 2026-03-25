@@ -395,6 +395,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         )
 
     @app.route("/<view>/request/<path:name>")
+    @app.route("/<view>/<path:name>")
     def request_detail(view, name):
         if view not in VIEWS or VIEWS[view].get("overview_only"):
             abort(404)

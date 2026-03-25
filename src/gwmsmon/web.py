@@ -144,6 +144,29 @@ def create_app(config_path="/etc/gwmsmon.conf"):
 
     # --- Routes ---
 
+    @app.route("/status")
+    def status():
+        basedir = cfg.get("prodview", "basedir")
+        status_data = _load_json(basedir, "service_status.json")
+        updated = status_data.get("updated", 0)
+        state_path = os.path.join(
+            cfg.get("globalview", "basedir"), "exit_code_state.json")
+        state_size = 0
+        try:
+            state_size = os.path.getsize(state_path)
+        except OSError:
+            pass
+        return render_template(
+            "status.html",
+            view="prodview",
+            view_cfg=VIEWS["prodview"],
+            status=status_data,
+            state_size_mb=round(state_size / 1024 / 1024, 1),
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
+
     @app.route("/")
     def index():
         return redirect(url_for("overview", view="prodview"))

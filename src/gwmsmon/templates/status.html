@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Service Status — gwmsmon{% endblock %}
+{% block content %}
+<h1>Service Status</h1>
+
+{% if status %}
+<table class="data-table compact">
+  <tbody>
+  <tr><td style="font-weight:600">Cycle</td><td>{{ status.get('cycle', '?') }}</td></tr>
+  <tr><td style="font-weight:600">Cycle Time</td><td>{{ status.get('cycle_time', '?') }}s</td></tr>
+  <tr><td style="font-weight:600">RSS Memory</td><td>{{ status.get('rss_mb', '?') }} MB</td></tr>
+  <tr><td style="font-weight:600">State File</td><td>{{ state_size_mb }} MB</td></tr>
+  <tr><td style="font-weight:600">Timeseries Entities</td><td>{{ status.get('ts_entities', 0)|fmt }}</td></tr>
+  <tr><td style="font-weight:600">Timeseries Points</td><td>{{ status.get('ts_points', 0)|fmt }}</td></tr>
+  <tr><td style="font-weight:600">Exit Code Workflows</td><td>{{ status.get('exit_code_workflows', 0)|fmt }}</td></tr>
+  <tr><td style="font-weight:600">Failed Job Records</td><td>{{ status.get('failed_job_records', 0)|fmt }}</td></tr>
+  <tr><td style="font-weight:600">Lifetime Efficiency Entries</td><td>{{ status.get('efficiency_lifetime', 0)|fmt }}</td></tr>
+  </tbody>
+</table>
+{% else %}
+<p>No status data available yet.</p>
+{% endif %}
+{% endblock %}

@@ -124,6 +124,32 @@ def main():
                  "ts_entities=%d ts_points=%d",
                  cycle, elapsed, rss_mb, ts_entities, ts_points)
 
+        # Write service status
+        ec_wfs = sum(len(wfs) for wfs in state.exit_codes.values())
+        failed_count = sum(
+            len(recs)
+            for sites in state.failed_job_records.values()
+            for wfs in sites.values()
+            for recs in wfs.values())
+        import json as _json
+        status_path = os.path.join(
+            cfg.get("prodview", "basedir"), "service_status.json")
+        try:
+            with open(status_path, "w") as f:
+                _json.dump({
+                    "cycle": cycle,
+                    "cycle_time": round(elapsed, 1),
+                    "rss_mb": round(rss_mb),
+                    "ts_entities": ts_entities,
+                    "ts_points": ts_points,
+                    "exit_code_workflows": ec_wfs,
+                    "failed_job_records": failed_count,
+                    "efficiency_lifetime": len(state.efficiency_lifetime),
+                    "updated": time.time(),
+                }, f)
+        except OSError:
+            pass
+
         if args.once:
             break
 

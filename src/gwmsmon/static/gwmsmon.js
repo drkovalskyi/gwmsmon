@@ -517,6 +517,27 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     return {data: data, tMin: timestamps[0], tMax: timestamps[timestamps.length - 1]};
   }
 
+  // Extend aligned data to xMax by repeating last value for each series
+  function extendToNow(aligned, xMax) {
+    if (!aligned || !aligned.data.length) return aligned;
+    var ts = aligned.data[0];
+    var lastT = ts[ts.length - 1];
+    if (lastT >= xMax) return aligned;
+    var newData = [new Float64Array(ts.length + 1)];
+    newData[0].set(ts);
+    newData[0][ts.length] = xMax;
+    for (var i = 1; i < aligned.data.length; i++) {
+      var s = aligned.data[i];
+      var ns = new Float64Array(s.length + 1);
+      ns.set(s);
+      ns[s.length] = s[s.length - 1]; // repeat last value
+      newData.push(ns);
+    }
+    aligned.data = newData;
+    aligned.tMax = xMax;
+    return aligned;
+  }
+
   // Downsample aligned data arrays by averaging into fixed-size time buckets.
   // aligned = {data: [timestamps, series1, ...], tMin, tMax}
   // bucketSec = target bucket width in seconds
@@ -612,13 +633,6 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     return out;
   }
 
-  // X-axis: grid lines at range edges with GRID_N intervals
-  function xGridSplits(u, axisIdx, scaleMin, scaleMax) {
-    var out = [];
-    var step = (scaleMax - scaleMin) / GRID_N;
-    for (var i = 0; i <= GRID_N; i++) out.push(scaleMin + step * i);
-    return out;
-  }
 
   // Tooltip plugin — shows values on cursor hover
   function tooltipPlugin() {
@@ -746,6 +760,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var aligned = buildAligned(series, seriesKeys, xMin);
     if (!aligned) return;
     if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
+    extendToNow(aligned, xMax);
 
     var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
     var yMax = sharedSimpleYMax || alignedCpusMax(1);
@@ -774,7 +789,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
-        { size: XAXIS_H, font: '10px sans-serif', splits: xGridSplits, values: xFmt, stroke: AXIS_STROKE },
+        { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE },
         {
           scale: 'y',
           size: 50,
@@ -839,7 +854,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
-        { size: XAXIS_H, font: '10px sans-serif', splits: xGridSplits, values: fmtDateSplits, stroke: AXIS_STROKE },
+        { size: XAXIS_H, font: '10px sans-serif', values: fmtDateSplits, stroke: AXIS_STROKE },
         {
           scale: 'y',
           size: 50,
@@ -905,6 +920,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     });
     var timestamps = Object.keys(tSet).map(Number).sort(function(a,b){return a-b;});
     if (!timestamps.length) return;
+    // Extend to xMax so lines reach the right edge
+    if (timestamps[timestamps.length - 1] < xMax) timestamps.push(xMax);
 
     // Build per-block raw value arrays aligned to timestamps
     // blockArrays[0]=B0, blockArrays[7]=B7
@@ -914,7 +931,9 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       for (var i = 0; i < s.t.length; i++) m[s.t[i]] = s.v[i];
       var arr = new Float64Array(timestamps.length);
       for (var i = 0; i < timestamps.length; i++) {
-        arr[i] = m[timestamps[i]] || 0;
+        // For the extended point, repeat the last known value
+        arr[i] = m[timestamps[i]] != null ? m[timestamps[i]] :
+                 (i > 0 ? arr[i-1] : 0);
       }
       return arr;
     });
@@ -1003,7 +1022,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
-        { size: XAXIS_H, font: '10px sans-serif', splits: xGridSplits, values: xFmt, stroke: AXIS_STROKE },
+        { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE },
         {
           scale: 'y',
           size: 50,
@@ -1166,6 +1185,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       var aligned = buildAligned(series, keys, xMin);
       if (!aligned) return;
       if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
+      extendToNow(aligned, xMax);
 
       var timestamps = aligned.data[0];
       var cpusArr = aligned.data[1];
@@ -1188,7 +1208,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         },
         axes: [
           isBottom
-            ? { size: XAXIS_H, font: '10px sans-serif', splits: xGridSplits, values: xFmt, stroke: AXIS_STROKE }
+            ? { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE }
             : { size: 2, values: function() { return []; }, ticks: { show: false } },
           {
             scale: 'cpus',

@@ -36,7 +36,7 @@ def _safe_path(basedir, untrusted):
 VIEWS = {
     "prodview": {
         "title": "Production",
-        "entity_label": "Workflow",
+        "entity_label": "Request",
         "show_priorities": True,
     },
     "analysisview": {
@@ -577,6 +577,54 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         filename = f"{schedd}-{jobid}-{retry}-log.tar.gz"
         return (f"{EOS_LOG_PATH}/{request}/{task_short}/{filename}",
                 task_short)
+
+    @app.route("/<view>/failed")
+    def failed_jobs_unified(view):
+        """Unified failed jobs view with optional filters."""
+        if view not in VIEWS or VIEWS[view].get("overview_only"):
+            abort(404)
+        from flask import request as req
+        basedir = cfg.get(view, "basedir")
+        data = _load_json(basedir, "failed_jobs.json")
+        jobs = data.get("jobs", [])
+
+        # Apply filters from query params
+        f_request = req.args.get("request", "")
+        f_site = req.args.get("site", "")
+        f_code = req.args.get("code", "")
+        if f_request:
+            jobs = [j for j in jobs
+                    if f_request.lower() in j.get("request", "").lower()]
+        if f_site:
+            jobs = [j for j in jobs
+                    if f_site.lower() in j.get("site", "").lower()]
+        if f_code:
+            jobs = [j for j in jobs if j.get("code") == f_code]
+
+        # Check EOS log existence and add descriptions
+        for job in jobs:
+            eos_path, _ = _eos_tarball_path(
+                job.get("request", ""), job.get("task", ""),
+                job.get("schedd", ""), job.get("jobid", 0),
+                job.get("retry", 0))
+            job["has_log"] = os.path.exists(eos_path)
+            job["desc"] = _describe_exit_code(str(job.get("code", "")))
+
+        summary = _load_json(basedir, "summary.json")
+        updated = summary.get("updated", 0)
+        return render_template(
+            "failed_jobs.html",
+            view=view,
+            view_cfg=VIEWS[view],
+            site_name=f_site,
+            request_name=f_request,
+            filter_code=f_code,
+            jobs=jobs,
+            unified=True,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
 
     @app.route("/<view>/site/<site_name>/failed/<path:request>")
     def failed_jobs(view, site_name, request):

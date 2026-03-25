@@ -1427,7 +1427,8 @@ class State:
                     "failure": [hist[t]["failure"] for t in hist_ts],
                 })
 
-            # Per-site failed job records
+            # Per-site failed job records + view-level combined file
+            all_failed = []
             for site, wfs in self.failed_job_records.get(view, {}).items():
                 safe_site = site.replace("/", "_")
                 _atomic_json(os.path.join(
@@ -1435,6 +1436,17 @@ class State:
                     "updated": self.updated,
                     "requests": wfs,
                 })
+                for wf, records in wfs.items():
+                    for r in records:
+                        rec = dict(r)
+                        rec["site"] = site
+                        rec["request"] = wf
+                        all_failed.append(rec)
+            all_failed.sort(key=lambda x: -x.get("ts", 0))
+            _atomic_json(os.path.join(basedir, "failed_jobs.json"), {
+                "updated": self.updated,
+                "jobs": all_failed[:5000],
+            })
 
     def flush_exit_code_state(self, cfg):
         """Persist exit code buckets and watermarks for restart recovery."""

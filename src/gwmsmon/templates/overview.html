@@ -195,7 +195,7 @@
       <td>{{ cpus_use.v|fmt }}</td>
       <td>{{ cpus_pend.v|fmt }}</td>
       <td>{{ wfc.get('total', 0)|fmt }}</td>
-      <td>{{ wfc.get('failures', 0)|fmt }}</td>
+      <td>{% if wfc.get('failures', 0) %}<a href="/{{ view }}/failed?request={{ name }}">{{ wfc.failures|fmt }}</a>{% else %}0{% endif %}</td>
       <td class="{% if wfc.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.failure_rate * 100)|round(1) }}%{% endif %}</td>
       <td class="{% if wfc.get('lt_running_eff', 0) and wfc.lt_running_eff < 0.5 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.get('lt_running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
       <td class="{% if wfc.get('lt_processing_eff', 0) and wfc.lt_processing_eff < 0.8 %}warn{% endif %}">{% if wfc.get('total', 0) %}{{ (wfc.get('lt_processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>
@@ -239,7 +239,7 @@
       <td>{{ data.get('CpusPending', 0)|fmt }}</td>
       <td>{{ data.get('UniquePressure', 0)|fmt }}</td>
       <td>{{ sec.get('total', 0)|fmt }}</td>
-      <td>{{ sec.get('failures', 0)|fmt }}</td>
+      <td>{% if sec.get('failures', 0) %}<a href="/{{ view }}/failed?site={{ name }}">{{ sec.failures|fmt }}</a>{% else %}0{% endif %}</td>
       <td class="{% if sec.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.failure_rate * 100)|round(1) }}%{% endif %}</td>
       <td class="{% if seff.get('running_eff', 0) and seff.running_eff < 0.5 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (seff.get('running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
       <td class="{% if seff.get('processing_eff', 0) and seff.processing_eff < 0.8 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (seff.get('processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>

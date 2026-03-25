@@ -1853,11 +1853,6 @@ class State:
                 "workflows": wf_out,
             })
 
-            _atomic_json(os.path.join(basedir, "site_summary.json"), {
-                "updated": self.updated,
-                "sites": view_data.get("sites", {}),
-            })
-
             # Per-request detail files + per-site reverse index
             wf_source = (view_data.get("workflows", {})
                          if view != "globalview"
@@ -1906,6 +1901,16 @@ class State:
                     "updated": self.updated,
                     "requests": reqs,
                 })
+
+            # Site summary with RequestCount
+            site_data = view_data.get("sites", {})
+            site_summary_out = {}
+            for site_name, counts in site_data.items():
+                entry = dict(counts)
+                entry["RequestCount"] = len(site_index.get(site_name, {}))
+                site_summary_out[site_name] = entry
+            _atomic_json(os.path.join(basedir, "site_summary.json"),
+                         site_summary_out)
 
             # Cross-reference: request → {site: [R, I, C, P]}
             cross_ref = {}

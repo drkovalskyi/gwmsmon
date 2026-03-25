@@ -289,7 +289,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             entity_url_prefix = "request"
 
         # Sort sites by running desc
-        sites = site_summary.get("sites", {})
+        sites = site_summary.get("sites") or site_summary
         sorted_sites = sorted(
             sites.items(),
             key=lambda x: -x[1].get("Running", 0),
@@ -519,7 +519,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         basedir = cfg.get(view, "basedir")
 
         site_summary = _load_json(basedir, "site_summary.json")
-        sites = site_summary.get("sites", {})
+        sites = site_summary.get("sites") or site_summary
         if name not in sites:
             abort(404)
 

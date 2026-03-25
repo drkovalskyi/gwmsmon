@@ -240,10 +240,9 @@ class State:
         st_prio = _ensure(view["workflows"], request, subtask, "_priority")
         st_prio.setdefault(prio, 0)
         st_prio[prio] += 1
-        st_prio.setdefault("_sum", 0)
-        st_prio.setdefault("_count", 0)
-        st_prio["_sum"] += job.get("JobPrio") or 0
-        st_prio["_count"] += 1
+        job_prio_st = job.get("JobPrio") or 0
+        if "_min" not in st_prio or job_prio_st < st_prio["_min"]:
+            st_prio["_min"] = job_prio_st
 
         # workflows[request][subtask][site] (if running at a site)
         if site and status == 2:
@@ -306,11 +305,9 @@ class State:
         req_prio.setdefault("_jobs", {})
         req_prio["_jobs"].setdefault(prio, 0)
         req_prio["_jobs"][prio] += 1
-        req_prio.setdefault("_sum", 0)
-        req_prio.setdefault("_count", 0)
         job_prio_val = job.get("JobPrio") or 0
-        req_prio["_sum"] += job_prio_val
-        req_prio["_count"] += 1
+        if "_min" not in req_prio or job_prio_val < req_prio["_min"]:
+            req_prio["_min"] = job_prio_val
 
     def _aggregate_analysisview(self, view, job, status, cpus, user,
                                 schedd_name):
@@ -1837,9 +1834,7 @@ class State:
                         st_out = dict(data.get("Summary", {}))
                         st_prio = data.get("_priority", {})
                         if st_prio:
-                            st_count = st_prio.get("_count", 0)
-                            st_out["_prio"] = (st_prio["_sum"] // st_count
-                                               if st_count else 0)
+                            st_out["_prio"] = st_prio.get("_min", 0)
                         req_out[st] = st_out
                     wf_out[req] = req_out
 
@@ -1864,15 +1859,13 @@ class State:
                     prio_data = subtasks_raw.get("_priority", {})
                     if prio_data and req in wf_out:
                         jobs_by_block = prio_data.get("_jobs", {})
-                        total_jobs = prio_data.get("_count", 0)
-                        avg_prio = (prio_data["_sum"] // total_jobs
-                                    if total_jobs else 0)
+                        min_prio = prio_data.get("_min", 0)
                         dominant = (max(jobs_by_block,
                                         key=jobs_by_block.get)
                                     if jobs_by_block else "B7")
                         wf_out[req]["_priority"] = {
                             "block": dominant,
-                            "prio": avg_prio,
+                            "prio": min_prio,
                             "blocks": jobs_by_block,
                         }
 

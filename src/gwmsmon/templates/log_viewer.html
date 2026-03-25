@@ -1,8 +1,10 @@
 {% extends "base.html" %}
+{% set log_base = "/" + view + "/log/" + request_name + "/" + task + "/" + schedd + "/" + (jobid|string) + "/" + (retry|string) %}
 {% block title %}Logs — Job {{ jobid }} — gwmsmon{% endblock %}
 {% block content %}
-<h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / <a href="/{{ view }}/site/{{ site_name }}">{{ site_name }}</a> / <a href="/{{ view }}/site/{{ site_name }}/failed/{{ request_name }}">Failed Jobs</a> / Job {{ jobid }}</h1>
+<h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / Logs</h1>
 <p>Request: <a href="/{{ view }}/request/{{ request_name }}">{{ request_name }}</a></p>
+<p style="color:var(--text-th);font-size:13px">Task: {{ task }} | Schedd: {{ schedd }} | Job: {{ jobid }} | Retry: {{ retry }}</p>
 
 {% if members %}
 <details class="section" open>
@@ -15,7 +17,7 @@
     <tbody>
     {% for m in members %}
     <tr>
-      <td><a href="/{{ view }}/site/{{ site_name }}/failed/{{ request_name }}/log/{{ jobid }}/{{ m.name }}">{{ m.name }}</a></td>
+      <td><a href="{{ log_base }}/{{ m.name }}">{{ m.name }}</a></td>
       <td>{% if m.size >= 1048576 %}{{ (m.size / 1048576)|round(1) }} MB{% elif m.size >= 1024 %}{{ (m.size / 1024)|round(1) }} KB{% else %}{{ m.size }} B{% endif %}</td>
     </tr>
     {% endfor %}

@@ -218,20 +218,27 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       var wfComp = null;   // [done, fail, cpu, wall_cpus, slot_ok, slot_all]
       if (matchingSites && crossRef) {
         var wfSites = name ? crossRef[name] : null;
-        if (wfSites) {
+        var cSites = completionXref && name && completionXref[name] ? completionXref[name] : {};
+        if (wfSites || Object.keys(cSites).length) {
           siteMatch = false;
           wfCounts = [0, 0, 0, 0];
           wfComp = [0, 0, 0, 0, 0, 0];
-          var cSites = completionXref && completionXref[name] ? completionXref[name] : {};
-          for (var s in wfSites) {
+          // Accumulate live job counts
+          if (wfSites) {
+            for (var s in wfSites) {
+              if (matchingSites.has(s)) {
+                siteMatch = true;
+                var v = wfSites[s];
+                wfCounts[0] += v[0]; wfCounts[1] += v[1];
+                wfCounts[2] += v[2]; wfCounts[3] += v[3];
+              }
+            }
+          }
+          // Accumulate completion counts (may include sites not in crossRef)
+          for (var s in cSites) {
             if (matchingSites.has(s)) {
               siteMatch = true;
-              var v = wfSites[s];
-              wfCounts[0] += v[0]; wfCounts[1] += v[1];
-              wfCounts[2] += v[2]; wfCounts[3] += v[3];
-              if (cSites[s]) {
-                for (var ci = 0; ci < 6; ci++) wfComp[ci] += cSites[s][ci] || 0;
-              }
+              for (var ci = 0; ci < 6; ci++) wfComp[ci] += cSites[s][ci] || 0;
             }
           }
         } else {

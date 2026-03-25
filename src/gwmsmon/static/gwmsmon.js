@@ -612,6 +612,14 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     return out;
   }
 
+  // X-axis: grid lines at range edges with GRID_N intervals
+  function xGridSplits(u, axisIdx, scaleMin, scaleMax) {
+    var out = [];
+    var step = (scaleMax - scaleMin) / GRID_N;
+    for (var i = 0; i <= GRID_N; i++) out.push(scaleMin + step * i);
+    return out;
+  }
+
   // Tooltip plugin — shows values on cursor hover
   function tooltipPlugin() {
     var tip;
@@ -766,7 +774,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
-        { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE },
+        { size: XAXIS_H, font: '10px sans-serif', splits: xGridSplits, values: xFmt, stroke: AXIS_STROKE },
         {
           scale: 'y',
           size: 50,
@@ -831,7 +839,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
-        { size: XAXIS_H, font: '10px sans-serif', values: fmtDateSplits, stroke: AXIS_STROKE },
+        { size: XAXIS_H, font: '10px sans-serif', splits: xGridSplits, values: fmtDateSplits, stroke: AXIS_STROKE },
         {
           scale: 'y',
           size: 50,
@@ -995,7 +1003,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         y: { min: 0, max: yMax, auto: false },
       },
       axes: [
-        { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE },
+        { size: XAXIS_H, font: '10px sans-serif', splits: xGridSplits, values: xFmt, stroke: AXIS_STROKE },
         {
           scale: 'y',
           size: 50,
@@ -1180,7 +1188,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         },
         axes: [
           isBottom
-            ? { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE }
+            ? { size: XAXIS_H, font: '10px sans-serif', splits: xGridSplits, values: xFmt, stroke: AXIS_STROKE }
             : { size: 2, values: function() { return []; }, ticks: { show: false } },
           {
             scale: 'cpus',

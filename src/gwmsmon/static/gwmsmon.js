@@ -788,7 +788,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       height: SIMPLE_CHART_H,
       cursor: { show: true },
       legend: { show: false },
-      padding: [4, 8, 2, LEFT_PAD],
+      padding: [10, 8, 2, LEFT_PAD],
       plugins: [tooltipPlugin()],
       scales: {
         x: { min: xMin, max: xMax },
@@ -854,7 +854,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       height: HISTOGRAM_H,
       cursor: { show: true },
       legend: { show: false },
-      padding: [4, 8, 2, LEFT_PAD],
+      padding: [10, 8, 2, LEFT_PAD],
       plugins: [tooltipPlugin()],
       scales: {
         x: { min: xMin, max: xMax },
@@ -1024,7 +1024,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       height: SIMPLE_CHART_H,
       cursor: { show: true },
       legend: { show: false },
-      padding: [4, 8, 2, LEFT_PAD],
+      padding: [10, 8, 2, LEFT_PAD],
       plugins: [stackedTooltipPlugin()],
       scales: {
         x: { min: xMin, max: xMax },
@@ -1084,7 +1084,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       height: SIMPLE_CHART_H,
       cursor: { show: true },
       legend: { show: false },
-      padding: [4, 8, 2, LEFT_PAD],
+      padding: [10, 8, 2, LEFT_PAD],
       plugins: [tooltipPlugin()],
       scales: {
         x: { min: xMin, max: xMax },
@@ -1291,7 +1291,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         height: isBottom ? PANEL_BOT_H : PANEL_TOP_H,
         cursor: { show: true },
         legend: { show: false },
-        padding: [4, 4, isBottom ? 2 : 0, LEFT_PAD],
+        padding: [10, 4, isBottom ? 2 : 0, LEFT_PAD],
         plugins: [tooltipPlugin(), rightLabelPlugin('cores/job', RATIO_COLOR)],
         scales: {
           x: { min: xMin, max: xMax },

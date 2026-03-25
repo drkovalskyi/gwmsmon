@@ -1646,7 +1646,22 @@ class State:
                 for k in req_totals:
                     req_totals[k] += summary.get(k, 0)
             self._ts_append("prodview", f"request:{req}", req_totals, now)
-        for site, counts in snap["prodview"]["sites"].items():
+        # Per-site CPU breakdown by category
+        prod_sites = snap["prodview"].get("sites", {})
+        ana_sites = snap["analysisview"].get("sites", {})
+        gv_sites = snap["globalview"].get("sites", {})
+        all_site_names = set(prod_sites) | set(ana_sites) | set(gv_sites)
+        for site in all_site_names:
+            prod_cpus = prod_sites.get(site, {}).get("CpusInUse", 0)
+            ana_cpus = ana_sites.get(site, {}).get("CpusInUse", 0)
+            total_cpus = gv_sites.get(site, {}).get("CpusInUse", 0)
+            other_cpus = max(0, total_cpus - prod_cpus - ana_cpus)
+            self._ts_append("prodview", f"site:{site}", {
+                "CpusProd": prod_cpus,
+                "CpusAna": ana_cpus,
+                "CpusOther": other_cpus,
+            }, now)
+        for site, counts in prod_sites.items():
             self._ts_append("prodview", f"site:{site}", counts, now)
         # Per-site failure rate and efficiency (1h window)
         cutoff_1h = now - EXIT_CODE_WINDOWS["1h"]

@@ -1048,16 +1048,16 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     new uPlot(opts, data, el);
   }
 
-  // Site monitor chart: CpusInUse (left) + FailureRate/CPUEff/ProcEff % (right)
+  // Site monitor chart: stacked CPUs by category (left) + % metrics (right)
   function renderSiteMonitorChart(el, series) {
-    var interval = 7 * 24 * 3600; // always 7 days
+    var interval = 7 * 24 * 3600;
     var loader = el.querySelector('.chart-loading');
     if (loader) loader.remove();
 
     var xMax = Math.floor(Date.now() / 1000);
     var xMin = xMax - interval;
 
-    var cpusKeys = ['CpusInUse'];
+    var cpusKeys = ['CpusProd', 'CpusAna', 'CpusOther'];
     var pctKeys = ['FailureRate', 'CPUEff', 'ProcEff'];
     var allKeys = cpusKeys.concat(pctKeys);
 
@@ -1066,15 +1066,33 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     aligned = downsampleAligned(aligned, 3600);
     extendToEdges(aligned, xMin, xMax);
 
-    // Find max CPUs for left axis
+    // Stack CPU series: other(bottom) + analysis(mid) + production(top)
+    // Data order: [ts, CpusProd, CpusAna, CpusOther, FailRate, CPUEff, ProcEff]
+    var n = aligned.data[0].length;
+    var prod = aligned.data[1];   // CpusProd
+    var ana = aligned.data[2];    // CpusAna
+    var other = aligned.data[3];  // CpusOther
+    // Cumulative stacks for uPlot (painted bottom-up, last series on top)
+    var cumOther = new Float64Array(n);
+    var cumAna = new Float64Array(n);
+    var cumProd = new Float64Array(n);
     var cpusMax = 1;
-    var cpusIdx = 1; // first series after timestamps
-    for (var i = 0; i < aligned.data[cpusIdx].length; i++) {
-      var v = aligned.data[cpusIdx][i];
-      if (v > cpusMax) cpusMax = v;
+    for (var i = 0; i < n; i++) {
+      cumOther[i] = (other[i] || 0);
+      cumAna[i] = cumOther[i] + (ana[i] || 0);
+      cumProd[i] = cumAna[i] + (prod[i] || 0);
+      if (cumProd[i] > cpusMax) cpusMax = cumProd[i];
     }
+    // Replace data arrays with cumulative
+    aligned.data[1] = cumProd;   // production on top
+    aligned.data[2] = cumAna;    // analysis middle
+    aligned.data[3] = cumOther;  // other bottom
+
     var yMaxCpus = alignedCpusMax(cpusMax);
 
+    var PROD_COLOR = '#9EB8E2';
+    var ANA_COLOR = '#D9C68A';
+    var OTHER_COLOR = '#A0BF9C';
     var FAIL_COLOR = isDark ? '#FF6B6B' : '#D32F2F';
     var CPUEFF_COLOR = isDark ? '#64B5F6' : '#1976D2';
     var PROCEFF_COLOR = isDark ? '#81C784' : '#388E3C';
@@ -1116,7 +1134,9 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       ],
       series: [
         {},
-        { scale: 'cpus', stroke: CPUS_COLOR, width: 2, label: 'CPUs In Use' },
+        { scale: 'cpus', stroke: PROD_COLOR, fill: PROD_COLOR + '99', width: 0, label: 'Production' },
+        { scale: 'cpus', stroke: ANA_COLOR, fill: ANA_COLOR + '99', width: 0, label: 'Analysis' },
+        { scale: 'cpus', stroke: OTHER_COLOR, fill: OTHER_COLOR + '99', width: 0, label: 'Other' },
         { scale: 'pct', stroke: FAIL_COLOR, width: 1.5, label: 'Failure %' },
         { scale: 'pct', stroke: CPUEFF_COLOR, width: 1.5, label: 'CPU Eff %' },
         { scale: 'pct', stroke: PROCEFF_COLOR, width: 1.5, label: 'Proc Eff %' },

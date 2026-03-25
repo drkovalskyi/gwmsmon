@@ -105,7 +105,7 @@
     <tr>
       <td><a href="/{{ view }}/exitcode/{{ entry.code }}">{{ entry.code }}</a></td>
       <td>{{ entry.desc }}</td>
-      <td>{{ entry.count|fmt }}</td>
+      <td><a href="/{{ view }}/failed?site={{ name }}&code={{ entry.code }}">{{ entry.count|fmt }}</a></td>
     </tr>
     {% endif %}
     {% endfor %}

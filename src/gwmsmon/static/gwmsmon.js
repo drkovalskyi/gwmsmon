@@ -1086,6 +1086,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       cumTier0[i] = cumProd[i] + (tier0[i] || 0);
       if (cumTier0[i] > cpusMax) cpusMax = cumTier0[i];
     }
+    // Keep raw values for tooltip
+    var rawData = [tier0, prod, ana, other];
     aligned.data[1] = cumTier0;  // tier0 on top
     aligned.data[2] = cumProd;   // production
     aligned.data[3] = cumAna;    // analysis
@@ -1101,13 +1103,54 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var CPUEFF_COLOR = isDark ? '#64B5F6' : '#1976D2';
     var PROCEFF_COLOR = isDark ? '#81C784' : '#388E3C';
 
+    // Custom tooltip that shows raw (non-cumulative) values for stacked series
+    function siteMonitorTooltip() {
+      var tip;
+      return {
+        hooks: {
+          init: [function(u) {
+            tip = document.createElement('div');
+            tip.className = 'chart-tooltip';
+            tip.style.display = 'none';
+            u.over.appendChild(tip);
+          }],
+          setCursor: [function(u) {
+            var idx = u.cursor.idx;
+            if (idx == null) { tip.style.display = 'none'; return; }
+            var ts = u.data[0][idx];
+            var d = new Date(ts * 1000);
+            var time = ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+            var html = '<b>' + d.toLocaleDateString() + ' ' + time + '</b>';
+            for (var i = 1; i < u.series.length; i++) {
+              if (!u.series[i].show) continue;
+              // Use raw value for stacked CPU series (indices 1-4), data value for others
+              var v = (i >= 1 && i <= 4) ? (rawData[i-1][idx] || 0) : u.data[i][idx];
+              if (v != null && !isNaN(v)) {
+                var color = u.series[i]._color || u.series[i].stroke;
+                if (typeof color === 'function') color = '#000';
+                var sLabel = u.series[i].label;
+                var formatted = (u.series[i].scale === 'pct') ? fmtRatio(v) : fmtCount(v);
+                html += '<br><span style="color:'+color+'">\u25CF</span> '+sLabel+': '+formatted;
+              }
+            }
+            tip.innerHTML = html;
+            tip.style.display = 'block';
+            var left = u.cursor.left + 12;
+            if (left + tip.offsetWidth > u.over.offsetWidth) left = u.cursor.left - tip.offsetWidth - 12;
+            tip.style.left = left + 'px';
+            tip.style.top = (u.cursor.top - 10) + 'px';
+          }]
+        }
+      };
+    }
+
     var opts = {
       width: CHART_W,
       height: SIMPLE_CHART_H,
       cursor: { show: true },
       legend: { show: false },
       padding: [10, 8, 2, LEFT_PAD],
-      plugins: [tooltipPlugin()],
+      plugins: [siteMonitorTooltip()],
       scales: {
         x: { min: xMin, max: xMax },
         cpus: { min: 0, max: yMaxCpus, auto: false },

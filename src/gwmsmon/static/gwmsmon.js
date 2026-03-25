@@ -664,9 +664,10 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
             if (!u.series[i].show) continue;
             var v = u.data[i][idx];
             if (v != null && !isNaN(v)) {
-              var color = u.series[i].stroke;
+              var color = u.series[i]._color || u.series[i].stroke;
+              if (typeof color === 'function') color = '#000';
               var sLabel = u.series[i].label;
-              var formatted = (u.series[i].scale === 'ratio') ? fmtRatio(v) : fmtCount(v);
+              var formatted = (u.series[i].scale === 'ratio' || u.series[i].scale === 'pct') ? fmtRatio(v) : fmtCount(v);
               html += '<br><span style="color:' + color + '">\u25CF</span> ' + sLabel + ': ' + formatted;
             }
           }
@@ -1137,13 +1138,13 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       ],
       series: [
         {},
-        { scale: 'cpus', stroke: TIER0_COLOR, fill: TIER0_COLOR + '99', width: 0, label: 'Tier0' },
-        { scale: 'cpus', stroke: PROD_COLOR, fill: PROD_COLOR + '99', width: 0, label: 'Production' },
-        { scale: 'cpus', stroke: ANA_COLOR, fill: ANA_COLOR + '99', width: 0, label: 'Analysis' },
-        { scale: 'cpus', stroke: OTHER_COLOR, fill: OTHER_COLOR + '99', width: 0, label: 'Other' },
-        { scale: 'pct', stroke: FAIL_COLOR, width: 1.5, label: 'Failure %' },
-        { scale: 'pct', stroke: CPUEFF_COLOR, width: 1.5, label: 'CPU Eff %' },
-        { scale: 'pct', stroke: PROCEFF_COLOR, width: 1.5, label: 'Proc Eff %' },
+        { scale: 'cpus', stroke: TIER0_COLOR, fill: TIER0_COLOR + '99', width: 0, label: 'Tier0', _color: TIER0_COLOR },
+        { scale: 'cpus', stroke: PROD_COLOR, fill: PROD_COLOR + '99', width: 0, label: 'Production', _color: PROD_COLOR },
+        { scale: 'cpus', stroke: ANA_COLOR, fill: ANA_COLOR + '99', width: 0, label: 'Analysis', _color: ANA_COLOR },
+        { scale: 'cpus', stroke: OTHER_COLOR, fill: OTHER_COLOR + '99', width: 0, label: 'Other', _color: OTHER_COLOR },
+        { scale: 'pct', stroke: FAIL_COLOR, width: 1.5, label: 'Failure %', _color: FAIL_COLOR },
+        { scale: 'pct', stroke: CPUEFF_COLOR, width: 1.5, label: 'CPU Eff %', _color: CPUEFF_COLOR },
+        { scale: 'pct', stroke: PROCEFF_COLOR, width: 1.5, label: 'Proc Eff %', _color: PROCEFF_COLOR },
       ],
     };
 

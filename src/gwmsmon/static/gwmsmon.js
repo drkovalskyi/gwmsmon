@@ -889,7 +889,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         {
           scale: 'y',
           stroke: isDark ? '#2050A0' : '#1A4FA0',
-          fill: SUCCESS_COLOR,
+          fill: SUCCESS_COLOR + '90',
           width: 1.5,
           label: 'Success',
           paths: stepPaths,
@@ -897,7 +897,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         {
           scale: 'y',
           stroke: isDark ? '#CC6000' : '#B04000',
-          fill: FAILURE_COLOR,
+          fill: FAILURE_COLOR + '90',
           width: 1.5,
           label: 'Failure',
           paths: stepPaths,

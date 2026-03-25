@@ -649,7 +649,9 @@ class State:
         - globalview: best Chirp code, then ExitBySignal as SIG:N, then ExitCode
         """
         count = 0
+        errors = 0
         for job in history_jobs:
+          try:
             raw_exit = job.get("ExitCode")
             if raw_exit is None:
                 continue
@@ -779,9 +781,15 @@ class State:
                                   gv_key, site, owner)
             self._add_efficiency("globalview", gv_key, site,
                                  minute, gv_code, job)
+          except Exception:
+            errors += 1
+            if errors <= 3:
+                log.warning("bad history job record", exc_info=True)
 
         self._prune_exit_code_window()
         self._prune_exit_detail_window()
+        if errors:
+            log.warning("skipped %d bad exit code records", errors)
         log.info("processed %d exit code records", count)
 
     def _add_exit_detail(self, view, code, minute, workflow, site, user):
@@ -1428,6 +1436,7 @@ class State:
                 })
 
             # Per-site failed job records + view-level combined file
+            eos_base = "/eos/cms/store/logs/prod/recent/PRODUCTION"
             all_failed = []
             for site, wfs in self.failed_job_records.get(view, {}).items():
                 safe_site = site.replace("/", "_")
@@ -1441,6 +1450,14 @@ class State:
                         rec = dict(r)
                         rec["site"] = site
                         rec["request"] = wf
+                        # Pre-check EOS log existence
+                        task_short = rec.get("task", "").rsplit("/", 1)[-1]
+                        schedd = rec.get("schedd", "")
+                        jobid = rec.get("jobid", 0)
+                        retry = rec.get("retry", 0)
+                        eos_path = (f"{eos_base}/{wf}/{task_short}/"
+                                    f"{schedd}-{jobid}-{retry}-log.tar.gz")
+                        rec["has_log"] = os.path.exists(eos_path)
                         all_failed.append(rec)
             all_failed.sort(key=lambda x: -x.get("ts", 0))
             _atomic_json(os.path.join(basedir, "failed_jobs.json"), {
@@ -1752,6 +1769,18 @@ class State:
 
             for e in dead_entities:
                 del entities[e]
+
+        # Prune efficiency_lifetime for workflows no longer in snapshot
+        active_wfs = set(self.snapshot.get("prodview", {}).get(
+            "workflows", {}).keys())
+        if active_wfs:
+            dead = [wf for wf in self.efficiency_lifetime
+                    if wf not in active_wfs]
+            for wf in dead:
+                del self.efficiency_lifetime[wf]
+            if dead:
+                log.info("pruned %d inactive workflows from "
+                         "efficiency_lifetime", len(dead))
 
     # --- Step 7: Persistence ---
 

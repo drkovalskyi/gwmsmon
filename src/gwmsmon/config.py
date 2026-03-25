@@ -58,8 +58,7 @@ def load(path="/etc/gwmsmon.conf"):
             if not cp.has_option(section, key) or not cp.get(section, key):
                 missing.append(f"[{section}] {key}")
     if missing:
-        import logging
-        logging.getLogger(__name__).warning(
-            "config missing required keys: %s", ", ".join(missing))
+        raise SystemExit(
+            "config missing required keys: " + ", ".join(missing))
 
     return cp

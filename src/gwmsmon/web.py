@@ -544,13 +544,8 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         if f_code:
             jobs = [j for j in jobs if j.get("code") == f_code]
 
-        # Check EOS log existence and add descriptions
+        # Add descriptions (has_log pre-computed by collector)
         for job in jobs:
-            eos_path, _ = _eos_tarball_path(
-                job.get("request", ""), job.get("task", ""),
-                job.get("schedd", ""), job.get("jobid", 0),
-                job.get("retry", 0))
-            job["has_log"] = os.path.exists(eos_path)
             job["desc"] = _describe_exit_code(str(job.get("code", "")))
 
         summary = _load_json(basedir, "summary.json")
@@ -580,11 +575,13 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             f"{safe_site}_failed_jobs.json")
         jobs = data.get("requests", {}).get(request, [])
         for job in jobs:
-            eos_path, _ = _eos_tarball_path(
-                request, job.get("task", ""),
-                job.get("schedd", ""), job.get("jobid", 0),
-                job.get("retry", 0))
-            job["has_log"] = os.path.exists(eos_path)
+            # has_log from combined file if available, else check EOS
+            if "has_log" not in job:
+                eos_path, _ = _eos_tarball_path(
+                    request, job.get("task", ""),
+                    job.get("schedd", ""), job.get("jobid", 0),
+                    job.get("retry", 0))
+                job["has_log"] = os.path.exists(eos_path)
             job["desc"] = _describe_exit_code(str(job.get("code", "")))
 
         summary = _load_json(basedir, "summary.json")
@@ -664,6 +661,8 @@ def create_app(config_path="/etc/gwmsmon.conf"):
                 member = tar.getmember(filepath)
                 if not member.isfile():
                     abort(404)
+                if member.size > 50 * 1024 * 1024:  # 50MB limit
+                    abort(413)
                 f = tar.extractfile(member)
                 content = f.read()
         except (tarfile.TarError, KeyError, OSError):

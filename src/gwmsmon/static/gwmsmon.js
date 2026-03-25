@@ -832,8 +832,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var failure = data.failure;
     if (!ts || !ts.length) return;
 
-    // Aggregate 10-min buckets into 1-hour buckets
-    var hourBucket = 3600;
+    // Aggregate 10-min buckets into 4-hour buckets
+    var hourBucket = 4 * 3600;
     var hourMap = {};
     for (var i = 0; i < ts.length; i++) {
       var hk = Math.floor(ts[i] / hourBucket) * hourBucket;

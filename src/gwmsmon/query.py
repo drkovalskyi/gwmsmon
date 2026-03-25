@@ -35,6 +35,7 @@ JOB_PROJECTION = [
     "Owner",
     "EnteredCurrentStatus",
     "AccountingGroup",
+    "AcctGroup",
     "WMAgent_RequestName",
     "WMAgent_SubTaskName",
     "JobPrio",

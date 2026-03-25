@@ -139,15 +139,12 @@ class State:
             if status == 2:
                 site = job.get("MATCH_GLIDEIN_CMSSite")
                 if site:
+                    acct = job.get("AcctGroup", "") or ""
                     sc = site_cpus_cat.setdefault(
                         site, {"tier0": 0, "production": 0,
                                "analysis": 0, "other": 0})
-                    if schedd_type == "tier0schedd":
-                        sc["tier0"] += cpus
-                    elif schedd_type == "prodschedd":
-                        sc["production"] += cpus
-                    elif schedd_type == "crabschedd":
-                        sc["analysis"] += cpus
+                    if acct in ("tier0", "production", "analysis"):
+                        sc[acct] += cpus
                     else:
                         sc["other"] += cpus
 

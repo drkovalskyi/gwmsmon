@@ -832,17 +832,28 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var failure = data.failure;
     if (!ts || !ts.length) return;
 
-    // Build uPlot data: [timestamps, total (success+failure), failure]
-    var timestamps = new Float64Array(ts);
-    var totalArr = new Float64Array(ts.length);
-    var failArr = new Float64Array(ts.length);
+    // Aggregate 10-min buckets into 1-hour buckets
+    var hourBucket = 3600;
+    var hourMap = {};
     for (var i = 0; i < ts.length; i++) {
-      totalArr[i] = (success[i] || 0) + (failure[i] || 0);
-      failArr[i] = failure[i] || 0;
+      var hk = Math.floor(ts[i] / hourBucket) * hourBucket;
+      if (!hourMap[hk]) hourMap[hk] = {s: 0, f: 0};
+      hourMap[hk].s += success[i] || 0;
+      hourMap[hk].f += failure[i] || 0;
+    }
+    var hourKeys = Object.keys(hourMap).map(Number).sort(function(a,b){return a-b;});
+
+    var timestamps = new Float64Array(hourKeys);
+    var totalArr = new Float64Array(hourKeys.length);
+    var failArr = new Float64Array(hourKeys.length);
+    for (var i = 0; i < hourKeys.length; i++) {
+      var h = hourMap[hourKeys[i]];
+      totalArr[i] = h.s + h.f;
+      failArr[i] = h.f;
     }
 
     var yMax = alignedCpusMax(arrMax(totalArr));
-    var bucketSize = data.bucket_size || 600;
+    var bucketSize = hourBucket;
 
     // Fixed 7-day x-range: right edge = last bucket + size, left edge = 168h before
     var xMax = ts[ts.length - 1] + bucketSize;

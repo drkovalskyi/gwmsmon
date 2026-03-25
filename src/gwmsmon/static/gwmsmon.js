@@ -1106,10 +1106,10 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
     var yMaxCpus = alignedCpusMax(cpusMax);
 
-    var TIER0_COLOR = '#E6A586';
-    var PROD_COLOR = '#9EB8E2';
-    var ANA_COLOR = '#D9C68A';
-    var OTHER_COLOR = '#A0BF9C';
+    var TIER0_COLOR = '#FA6400';
+    var PROD_COLOR = '#5794F2';
+    var ANA_COLOR = '#E0B402';
+    var OTHER_COLOR = '#56A64B';
     var FAIL_COLOR = isDark ? '#FF6B6B' : '#D32F2F';
     var CPUEFF_COLOR = isDark ? '#64B5F6' : '#1976D2';
     var PROCEFF_COLOR = isDark ? '#81C784' : '#388E3C';
@@ -1192,10 +1192,10 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       ],
       series: [
         {},
-        { scale: 'cpus', stroke: '#FA6400', fill: TIER0_COLOR + '99', width: 1.5, label: 'Tier0', _color: TIER0_COLOR },
-        { scale: 'cpus', stroke: '#818AB8', fill: PROD_COLOR + '99', width: 1.5, label: 'Production', _color: PROD_COLOR },
-        { scale: 'cpus', stroke: '#BFAC4D', fill: ANA_COLOR + '99', width: 1.5, label: 'Analysis', _color: ANA_COLOR },
-        { scale: 'cpus', stroke: '#7BAA3A', fill: OTHER_COLOR + '99', width: 1.5, label: 'Other', _color: OTHER_COLOR },
+        { scale: 'cpus', stroke: '#C04E00', fill: TIER0_COLOR + '80', width: 1.5, label: 'Tier0', _color: TIER0_COLOR },
+        { scale: 'cpus', stroke: '#3A6BC5', fill: PROD_COLOR + '80', width: 1.5, label: 'Production', _color: PROD_COLOR },
+        { scale: 'cpus', stroke: '#A88800', fill: ANA_COLOR + '80', width: 1.5, label: 'Analysis', _color: ANA_COLOR },
+        { scale: 'cpus', stroke: '#3D7A35', fill: OTHER_COLOR + '80', width: 1.5, label: 'Other', _color: OTHER_COLOR },
         { scale: 'pct', stroke: FAIL_COLOR, width: 1.5, label: 'Failure %', _color: FAIL_COLOR },
         { scale: 'pct', stroke: CPUEFF_COLOR, width: 1.5, label: 'CPU Eff %', _color: CPUEFF_COLOR },
         { scale: 'pct', stroke: PROCEFF_COLOR, width: 1.5, label: 'Proc Eff %', _color: PROCEFF_COLOR },

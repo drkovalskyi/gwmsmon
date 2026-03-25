@@ -1860,11 +1860,8 @@ class State:
                     if prio_data and req in wf_out:
                         jobs_by_block = prio_data.get("_jobs", {})
                         min_prio = prio_data.get("_min", 0)
-                        dominant = (max(jobs_by_block,
-                                        key=jobs_by_block.get)
-                                    if jobs_by_block else "B7")
                         wf_out[req]["_priority"] = {
-                            "block": dominant,
+                            "block": _prio_block(min_prio),
                             "prio": min_prio,
                             "blocks": jobs_by_block,
                         }

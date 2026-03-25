@@ -144,64 +144,6 @@ def create_app(config_path="/etc/gwmsmon.conf"):
 
     # --- Routes ---
 
-    @app.route("/debug/token")
-    def debug_token():
-        from flask import request as req, jsonify
-        import urllib.request
-        import urllib.parse
-        import ssl
-        token = req.headers.get("X-Oidc-Access-Token", "")
-        user = req.headers.get("X-Oidc-User", "")
-        ctx = ssl.create_default_context()
-
-        # Try token exchange for EOS audience
-        exchanged = ""
-        exchange_err = ""
-        if token:
-            try:
-                data = urllib.parse.urlencode({
-                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "subject_token": token,
-                    "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
-                    "audience": "eos-service",
-                    "client_id": "cms-gwmsmon",
-                    "client_secret": "QMxiaPIj4DZx06upvOkXZPFUowR41rpe",
-                }).encode()
-                r = urllib.request.Request(
-                    "https://auth.cern.ch/auth/realms/cern/protocol/openid-connect/token",
-                    data=data, method="POST")
-                resp = urllib.request.urlopen(r, timeout=10, context=ctx)
-                import json as _json
-                result = _json.loads(resp.read())
-                exchanged = result.get("access_token", "")[:30] + "..."
-            except urllib.error.HTTPError as e:
-                exchange_err = f"HTTP {e.code}: {e.read().decode()[:200]}"
-            except Exception as e:
-                exchange_err = str(e)
-
-        # Test EOS with exchanged token (or original)
-        eos_token = exchanged.rstrip(".") if exchanged else token
-        test_url = ("https://eoscms.cern.ch/eos/cms/store/logs/prod/"
-                    "recent/PRODUCTION/")
-        eos_result = "not tested"
-        if eos_token and len(eos_token) > 30:
-            try:
-                r = urllib.request.Request(test_url, method="HEAD")
-                r.add_header("Authorization", "Bearer " + eos_token)
-                resp = urllib.request.urlopen(r, timeout=10, context=ctx)
-                eos_result = f"HTTP {resp.status}"
-            except urllib.error.HTTPError as e:
-                eos_result = f"HTTP {e.code}"
-            except Exception as e:
-                eos_result = str(e)
-
-        return jsonify({
-            "user": user,
-            "token_length": len(token),
-            "exchange": exchanged or exchange_err,
-            "eos_test": eos_result,
-        })
-
     @app.route("/")
     def index():
         return redirect(url_for("overview", view="prodview"))

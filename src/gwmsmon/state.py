@@ -1478,15 +1478,20 @@ class State:
                 for wf, records in wfs.items():
                     eos_base = eos_log_dir(wf)
                     for r in records:
-                        # Cache has_log on the record — only stat once
-                        if "has_log" not in r:
+                        # Cache has_log + log_size on the record — only stat once
+                        if "has_log" not in r or ("has_log" in r and r["has_log"] and "log_mb" not in r):
                             task_short = r.get("task", "").rsplit("/", 1)[-1]
                             schedd = r.get("schedd", "")
                             jobid = r.get("jobid", 0)
                             retry = r.get("retry", 0)
                             eos_path = (f"{eos_base}/{wf}/{task_short}/"
                                         f"{schedd}-{jobid}-{retry}-log.tar.gz")
-                            r["has_log"] = os.path.exists(eos_path)
+                            try:
+                                sz = os.path.getsize(eos_path)
+                                r["has_log"] = True
+                                r["log_mb"] = round(sz / 1024 / 1024, 1)
+                            except OSError:
+                                r["has_log"] = False
                         rec = dict(r)
                         rec["site"] = site
                         rec["request"] = wf

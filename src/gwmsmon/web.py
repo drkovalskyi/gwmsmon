@@ -718,6 +718,20 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         )
 
     @app.route("/<view>/log/<path:request>/<task>/"
+                "<schedd>/<int:jobid>/<int:retry>/download")
+    def log_download(view, request, task, schedd, jobid, retry):
+        """Download the raw log tarball."""
+        if view not in VIEWS:
+            abort(404)
+        eos_path = _eos_log_path(request, task, schedd, jobid, retry)
+        if not os.path.exists(eos_path):
+            abort(404)
+        from flask import send_file
+        filename = f"{schedd}-{jobid}-{retry}-log.tar.gz"
+        return send_file(eos_path, as_attachment=True,
+                         download_name=filename)
+
+    @app.route("/<view>/log/<path:request>/<task>/"
                 "<schedd>/<int:jobid>/<int:retry>/<path:filepath>")
     def log_file(view, request, task, schedd, jobid, retry, filepath):
         """Serve a single file from a job's log tarball."""

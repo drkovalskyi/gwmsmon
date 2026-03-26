@@ -16,6 +16,7 @@ from flask import (Flask, abort, render_template, redirect,
 
 from gwmsmon import config
 from gwmsmon.exitcodes import describe as _describe_exit_code
+from gwmsmon.state import eos_log_dir
 
 log = logging.getLogger(__name__)
 
@@ -568,13 +569,12 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             updated_ts=updated,
         )
 
-    EOS_LOG_PATH = "/eos/cms/store/logs/prod/recent/PRODUCTION"
-
     def _eos_tarball_path(request, task, schedd, jobid, retry):
         """Construct EOS FUSE path for a job log tarball."""
         task_short = task.rsplit("/", 1)[-1] if task else ""
         filename = f"{schedd}-{jobid}-{retry}-log.tar.gz"
-        return (f"{EOS_LOG_PATH}/{request}/{task_short}/{filename}",
+        base = eos_log_dir(request)
+        return (f"{base}/{request}/{task_short}/{filename}",
                 task_short)
 
     @app.route("/<view>/failed")
@@ -591,6 +591,15 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         f_request = req.args.get("request", "")
         f_site = req.args.get("site", "")
         f_code = req.args.get("code", "")
+        f_host = req.args.get("host", "")
+        f_has_log = req.args.get("has_log", "")
+        f_hours = req.args.get("hours", "168")
+        try:
+            hours = int(f_hours)
+        except (ValueError, TypeError):
+            hours = 168
+        cutoff = time.time() - hours * 3600
+        jobs = [j for j in jobs if j.get("ts", 0) >= cutoff]
         if f_request:
             jobs = [j for j in jobs
                     if f_request.lower() in j.get("request", "").lower()]
@@ -599,6 +608,11 @@ def create_app(config_path="/etc/gwmsmon.conf"):
                     if f_site.lower() in j.get("site", "").lower()]
         if f_code:
             jobs = [j for j in jobs if j.get("code") == f_code]
+        if f_host:
+            jobs = [j for j in jobs
+                    if f_host.lower() in j.get("host", "").lower()]
+        if f_has_log == "1":
+            jobs = [j for j in jobs if j.get("has_log")]
 
         # Add descriptions (has_log pre-computed by collector)
         for job in jobs:
@@ -613,6 +627,9 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             site_name=f_site,
             request_name=f_request,
             filter_code=f_code,
+            filter_host=f_host,
+            filter_has_log=f_has_log,
+            filter_hours=str(hours),
             jobs=jobs,
             unified=True,
             updated=updated,
@@ -656,7 +673,8 @@ def create_app(config_path="/etc/gwmsmon.conf"):
 
     def _eos_log_path(request, task, schedd, jobid, retry):
         """Construct EOS FUSE path for a log tarball from URL components."""
-        return (f"{EOS_LOG_PATH}/{request}/{task}/"
+        base = eos_log_dir(request)
+        return (f"{base}/{request}/{task}/"
                 f"{schedd}-{jobid}-{retry}-log.tar.gz")
 
     @app.route("/<view>/log/<path:request>/<task>/"

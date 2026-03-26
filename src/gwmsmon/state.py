@@ -42,6 +42,22 @@ EXIT_CODE_WINDOW = 7 * 86400       # retain 7 days of buckets
 EXIT_CODE_BUCKET = 600              # 10-minute bucket resolution
 EXIT_CODE_WINDOWS = {"1h": 3600, "24h": 86400, "7d": 7 * 86400}
 
+EOS_LOG_BASE = "/eos/cms/store/logs/prod/recent"
+
+_EOS_PREFIXES = [
+    ("PromptReco_", "PromptReco"),
+    ("Repack_", "Repack"),
+    ("Express_", "Express"),
+]
+
+
+def eos_log_dir(request_name):
+    """Return EOS base directory for a request's logs."""
+    for prefix, subdir in _EOS_PREFIXES:
+        if request_name.startswith(prefix):
+            return f"{EOS_LOG_BASE}/{subdir}"
+    return f"{EOS_LOG_BASE}/PRODUCTION"
+
 
 def _ensure(d, *keys):
     """Ensure nested dict path exists, return innermost dict."""
@@ -941,14 +957,14 @@ class State:
                     dead_wfs.append(wf)
             for wf in dead_wfs:
                 del workflows[wf]
-        # Prune failed job records older than 1h
-        cutoff_1h = int(time.time()) - EXIT_CODE_WINDOWS["1h"]
+        # Prune failed job records older than 7d
+        cutoff_7d = int(time.time()) - EXIT_CODE_WINDOWS["7d"]
         for view, sites in self.failed_job_records.items():
             dead_sites = []
             for site, wfs in sites.items():
                 dead_wfs = []
                 for wf, records in wfs.items():
-                    wfs[wf] = [r for r in records if r["ts"] >= cutoff_1h]
+                    wfs[wf] = [r for r in records if r["ts"] >= cutoff_7d]
                     if not wfs[wf]:
                         dead_wfs.append(wf)
                 for wf in dead_wfs:
@@ -1145,7 +1161,7 @@ class State:
                                          if wtotal else 0),
                         "codes": wcodes,
                     }
-                w1h = wf_windows.get("1h", {})
+                w7d = wf_windows.get("7d", {})
                 # Per-workflow efficiency (windowed)
                 wf_eff_buckets = self.efficiency.get(view, {}).get(wf, {})
                 wf_eff = {}
@@ -1166,19 +1182,19 @@ class State:
                         "wall_cpu_hours": round(
                             lt_eff["wall_cpus"] / 3600, 1),
                     }
-                if w1h.get("total", 0):
-                    eff1h = wf_eff.get("1h", {})
+                if w7d.get("total", 0):
+                    eff7d = wf_eff.get("7d", {})
                     lt = self.efficiency_lifetime.get(wf)
                     lt_re = (round(lt["cpu"] / lt["wall_cpus"], 4)
                              if lt and lt.get("wall_cpus") else 0)
                     lt_pe = (round(lt["slot_ok"] / lt["slot_all"], 4)
                              if lt and lt.get("slot_all") else 0)
                     wf_completion[wf] = {
-                        "total": w1h["total"],
-                        "failures": w1h["failures"],
-                        "failure_rate": w1h["failure_rate"],
-                        "running_eff": eff1h.get("running_eff", 0),
-                        "processing_eff": eff1h.get("processing_eff", 0),
+                        "total": w7d["total"],
+                        "failures": w7d["failures"],
+                        "failure_rate": w7d["failure_rate"],
+                        "running_eff": eff7d.get("running_eff", 0),
+                        "processing_eff": eff7d.get("processing_eff", 0),
                         "lt_running_eff": lt_re,
                         "lt_processing_eff": lt_pe,
                     }
@@ -1451,7 +1467,6 @@ class State:
                 })
 
             # Per-site failed job records + view-level combined file
-            eos_base = "/eos/cms/store/logs/prod/recent/PRODUCTION"
             all_failed = []
             for site, wfs in self.failed_job_records.get(view, {}).items():
                 safe_site = site.replace("/", "_")
@@ -1461,18 +1476,20 @@ class State:
                     "requests": wfs,
                 })
                 for wf, records in wfs.items():
+                    eos_base = eos_log_dir(wf)
                     for r in records:
+                        # Cache has_log on the record — only stat once
+                        if "has_log" not in r:
+                            task_short = r.get("task", "").rsplit("/", 1)[-1]
+                            schedd = r.get("schedd", "")
+                            jobid = r.get("jobid", 0)
+                            retry = r.get("retry", 0)
+                            eos_path = (f"{eos_base}/{wf}/{task_short}/"
+                                        f"{schedd}-{jobid}-{retry}-log.tar.gz")
+                            r["has_log"] = os.path.exists(eos_path)
                         rec = dict(r)
                         rec["site"] = site
                         rec["request"] = wf
-                        # Pre-check EOS log existence
-                        task_short = rec.get("task", "").rsplit("/", 1)[-1]
-                        schedd = rec.get("schedd", "")
-                        jobid = rec.get("jobid", 0)
-                        retry = rec.get("retry", 0)
-                        eos_path = (f"{eos_base}/{wf}/{task_short}/"
-                                    f"{schedd}-{jobid}-{retry}-log.tar.gz")
-                        rec["has_log"] = os.path.exists(eos_path)
                         all_failed.append(rec)
             all_failed.sort(key=lambda x: -x.get("ts", 0))
             _atomic_json(os.path.join(basedir, "failed_jobs.json"), {
@@ -1945,7 +1962,7 @@ class State:
                     if not isinstance(sites_data, dict):
                         continue
                     for site_name, counts in sites_data.items():
-                        if site_name == "Summary":
+                        if site_name == "Summary" or site_name.startswith("_"):
                             continue
                         if not isinstance(counts, dict):
                             continue

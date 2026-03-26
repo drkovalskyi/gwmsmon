@@ -662,8 +662,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
             if (!u.series[i].show) continue;
             var v = u.data[i][idx];
             if (v != null && !isNaN(v)) {
-              var color = u.series[i]._color || u.series[i].stroke;
-              if (typeof color === 'function') color = '#000';
+              var color = u.series[i].stroke;
+              if (typeof color === 'function') color = color(u, i);
               var sLabel = u.series[i].label;
               var formatted = (u.series[i].scale === 'ratio' || u.series[i].scale === 'pct') ? fmtRatio(v) : fmtCount(v);
               html += '<br><span style="color:' + color + '">\u25CF</span> ' + sLabel + ': ' + formatted;

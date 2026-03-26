@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ view_cfg.title }} — gwmsmon{% endblock %}
 {% block content %}
+<style>
+#wf-table td:not(:first-child), #wf-table th:not(:first-child),
+#sites-table td:not(:first-child), #sites-table th:not(:first-child) { text-align: right; }
+</style>
 <h1>{{ view_cfg.title }} Overview</h1>
 
 <div class="stats-row" id="stats-row">

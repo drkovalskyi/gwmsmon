@@ -31,7 +31,7 @@
   .fj-table td:nth-child(1) { min-width: 400px; max-width: none; word-break: break-all; white-space: normal; overflow: visible; text-overflow: clip; }   /* Request */
   .fj-table th:nth-child(4), .fj-table td:nth-child(4) { min-width: 200px; }   /* Description */
   .fj-table th:nth-child(5), .fj-table td:nth-child(5) { min-width: 200px; word-break: break-all; }   /* Worker Node */
-  .fj-table th:nth-child(14), .fj-table td:nth-child(14) { min-width: 200px; word-break: break-all; }  /* Task */
+  .fj-table th:nth-child(11), .fj-table td:nth-child(11) { min-width: 200px; word-break: break-all; }  /* Task */
   /* Fixed: min-width = max-width */
   .fj-table th:nth-child(2), .fj-table td:nth-child(2) { min-width: 150px; max-width: 150px; }   /* Site */
   .fj-table th:nth-child(3), .fj-table td:nth-child(3) { min-width: 70px; max-width: 70px; }     /* Code */
@@ -40,12 +40,8 @@
   .fj-table th:nth-child(8), .fj-table td:nth-child(8) { min-width: 70px; max-width: 70px; }     /* Req Mem */
   .fj-table th:nth-child(9), .fj-table td:nth-child(9) { min-width: 70px; max-width: 70px; }     /* Disk */
   .fj-table th:nth-child(10), .fj-table td:nth-child(10) { min-width: 60px; max-width: 60px; }   /* CPUs */
-  .fj-table th:nth-child(11), .fj-table td:nth-child(11) { min-width: 75px; max-width: 75px; }   /* CMSSW Time */
-  .fj-table th:nth-child(12), .fj-table td:nth-child(12) { min-width: 70px; max-width: 70px; }   /* Events */
-  .fj-table th:nth-child(13), .fj-table td:nth-child(13) { min-width: 75px; max-width: 75px; }   /* CMSSW OK */
-  .fj-table th:nth-child(15), .fj-table td:nth-child(15) { min-width: 100px; max-width: 100px; }   /* Log */
-  .fj-table td:nth-child(n+6):nth-child(-n+12) { text-align: right; }
-  .fj-table td:nth-child(13) { text-align: center; }
+  .fj-table th:nth-child(12), .fj-table td:nth-child(12) { min-width: 100px; max-width: 100px; }   /* Log */
+  .fj-table td:nth-child(n+6):nth-child(-n+10) { text-align: right; }
 </style>
 
 <h1><a href="/{{ view }}/">{{ view_cfg.title }}</a> / Failed Jobs</h1>
@@ -78,9 +74,6 @@
     <th data-sort="num">Req Mem</th>
     <th data-sort="num">Disk (MB)</th>
     <th data-sort="num">CPUs</th>
-    <th data-sort="num">CMSSW Time</th>
-    <th data-sort="num">Events</th>
-    <th>CMSSW OK</th>
     <th>Task</th>
     <th>Log</th>
   </tr></thead>
@@ -97,9 +90,6 @@
     <td>{{ job.get('req_mem', 0)|fmt }}</td>
     <td>{{ job.get('disk_mb', 0)|fmt }}</td>
     <td>{{ job.get('cpus', 0) }}</td>
-    <td>{{ job.get('cmssw_time', 0)|fmt }}</td>
-    <td>{{ job.get('cmssw_events', 0)|fmt }}</td>
-    <td>{% if job.get('cmssw_done') %}yes{% elif job.get('cmssw_time', 0) %}no{% endif %}</td>
     <td title="{{ job.get('task', '') }}">{{ job.get('task', '').rsplit('/', 1)[-1] }}</td>
     <td>{% if job.has_log %}{% set lp = "/" ~ view ~ "/log/" ~ job.request ~ "/" ~ job.get('task', '').rsplit('/', 1)[-1] ~ "/" ~ job.get('schedd', '') ~ "/" ~ (job.jobid|string) ~ "/" ~ (job.get('retry', 0)|string) %}<a href="{{ lp }}" title="View logs">&#x1f441;</a> <a href="{{ lp }}/download" title="Download tarball" style="font-size:11px">tar.gz</a>{% if job.get('log_mb', 0) > 10 %} <span style="color:red" title="{{ job.log_mb }} MB">&#x26a0;</span>{% endif %}{% endif %}</td>
   </tr>
@@ -202,9 +192,6 @@
     <th data-sort="num">Req Mem</th>
     <th data-sort="num">Disk (MB)</th>
     <th data-sort="num">CPUs</th>
-    <th data-sort="num">CMSSW Time</th>
-    <th data-sort="num">Events</th>
-    <th>CMSSW OK</th>
     <th>Task</th>
     <th>Log</th>
   </tr></thead>
@@ -219,9 +206,6 @@
     <td>{{ job.get('req_mem', 0)|fmt }}</td>
     <td>{{ job.get('disk_mb', 0)|fmt }}</td>
     <td>{{ job.get('cpus', 0) }}</td>
-    <td>{{ job.get('cmssw_time', 0)|fmt }}</td>
-    <td>{{ job.get('cmssw_events', 0)|fmt }}</td>
-    <td>{% if job.get('cmssw_done') %}yes{% elif job.get('cmssw_time', 0) %}no{% endif %}</td>
     <td title="{{ job.get('task', '') }}">{{ job.get('task', '').rsplit('/', 1)[-1] }}</td>
     <td>{% if job.has_log %}{% set lp = "/" ~ view ~ "/log/" ~ job.get('request', request_name) ~ "/" ~ job.get('task', '').rsplit('/', 1)[-1] ~ "/" ~ job.get('schedd', '') ~ "/" ~ (job.jobid|string) ~ "/" ~ (job.get('retry', 0)|string) %}<a href="{{ lp }}" title="View logs">&#x1f441;</a> <a href="{{ lp }}/download" title="Download tarball" style="font-size:11px">tar.gz</a>{% if job.get('log_mb', 0) > 10 %} <span style="color:red" title="{{ job.log_mb }} MB">&#x26a0;</span>{% endif %}{% endif %}</td>
   </tr>

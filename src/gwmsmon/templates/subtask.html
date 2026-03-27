@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ subtask }} — gwmsmon{% endblock %}
+{% block content %}
+<style>
+  #debug-table td:not(:first-child), #debug-table th:not(:first-child) { text-align: right; }
+  #debug-table td:nth-child(6), #debug-table th:nth-child(6) { text-align: left; }
+  #debug-table td:last-child, #debug-table th:last-child { text-align: right; }
+</style>
+
+<h1>
+  <a href="/{{ view }}/">{{ view_cfg.title }}</a> /
+  <a href="/{{ view }}/request/{{ name }}">{{ name }}</a> /
+  {{ subtask }}
+</h1>
+
+<h2>Job Configuration Breakdown</h2>
+{% if debug_info %}
+<div class="table-scroll">
+<table class="data-table sortable" id="debug-table" data-sort-default="4:desc">
+  <thead><tr>
+    <th data-sort="num">WallTime (min)</th>
+    <th data-sort="num">Memory (MB)</th>
+    <th data-sort="num">CPUs</th>
+    <th data-sort="num">Running</th>
+    <th data-sort="num">Idle</th>
+    <th>Schedd</th>
+    <th data-sort="num">Sites</th>
+  </tr></thead>
+  <tbody>
+  {% for key, d in debug_info.items() %}
+  <tr>
+    <td>{{ d.get('WallTime', 0)|fmt }}</td>
+    <td>{{ d.get('Memory', 0)|fmt }}</td>
+    <td>{{ d.get('Cpus', 1) }}</td>
+    <td>{{ d.get('Running', 0)|fmt }}</td>
+    <td>{{ d.get('MatchingIdle', 0)|fmt }}</td>
+    <td><a href="/poolview/schedd/{{ d.get('Schedd', '') }}">{{ d.get('Schedd', '') }}</a></td>
+    <td title="{{ d.get('DesiredSites', '') }}">{{ d.get('DesiredSites', '').split(',')|length if d.get('DesiredSites') else 0 }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p>No debug data available yet. Data will appear after the next collector cycle.</p>
+{% endif %}
+{% endblock %}

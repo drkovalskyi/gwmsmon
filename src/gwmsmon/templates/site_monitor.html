@@ -7,7 +7,7 @@
 {% for site in site_names %}
 <div class="site-chart-row" data-site="{{ site }}">
   <div style="font-size:12px;font-weight:600;text-align:center;padding:2px 0"><a href="/{{ view }}/site/{{ site }}">{{ site }}</a></div>
-  <div class="chart" data-src="/{{ view }}/tsdata/site/{{ site }}" data-chart-type="site-monitor" data-interval="weekly"></div>
+  <div class="chart" data-src="/{{ view }}/tsdata/sites" data-chart-type="site-monitor" data-interval="weekly" data-entity="{{ site }}"></div>
 </div>
 {% endfor %}
 </div>

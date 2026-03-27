@@ -304,8 +304,11 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
           totals.cpusPend += parseInt(row.dataset.cpusPend) || 0;
           totals.done += parseInt(row.dataset.done) || 0;
           totals.fail += parseInt(row.dataset.fail) || 0;
-          totals.cpu += parseFloat(row.dataset.cpuEff || 0) * (parseInt(row.dataset.done) || 0);
-          totals.wallCpus += parseInt(row.dataset.done) || 0;
+          var rowDone = parseInt(row.dataset.done) || 0;
+          totals.cpu += parseFloat(row.dataset.cpuEff || 0) * rowDone;
+          totals.wallCpus += rowDone;
+          totals.slotOk += parseFloat(row.dataset.procEff || 0) * rowDone;
+          totals.slotAll += rowDone;
         }
       }
     });
@@ -1398,7 +1401,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
                 if (el.dataset.chartType === 'histogram') {
                   if (rawData[s]) renderHistogramChart(el, rawData[s]);
                 } else if (el.dataset.chartType === 'site-monitor') {
-                  if (allData[s]) renderSiteMonitorChart(el, allData[s]);
+                  var siteData = rawData[s] && el.dataset.entity ? rawData[s][el.dataset.entity] : allData[s];
+                  if (siteData) renderSiteMonitorChart(el, siteData);
                 } else if (el.dataset.chartType === 'simple') {
                   if (allData[s]) renderSimpleChart(el, allData[s], sharedSimpleYMax);
                 } else if (el.dataset.chartType === 'stacked') {

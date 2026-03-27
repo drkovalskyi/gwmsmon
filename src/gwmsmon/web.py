@@ -393,6 +393,41 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             updated_ts=updated,
         )
 
+    @app.route("/<view>/request/<path:name>/subtask/<path:subtask>")
+    def subtask_detail(view, name, subtask):
+        """Per-subtask detail page with schedd breakdown."""
+        if view not in VIEWS or VIEWS[view].get("overview_only"):
+            abort(404)
+        basedir = cfg.get(view, "basedir")
+        req_dir = _safe_path(basedir, name.replace("/", os.sep))
+        detail = _load_json(req_dir, "detail.json")
+        if not detail:
+            abort(404)
+        # Subtask keys are full paths like /{request}/{task}
+        # Try the URL value as-is, then with /{name}/ prefix
+        all_subtasks = detail.get("subtasks", {})
+        st_data = all_subtasks.get(subtask)
+        if not st_data:
+            st_data = all_subtasks.get("/" + name + "/" + subtask)
+        if not st_data:
+            st_data = all_subtasks.get("/" + subtask)
+        if not st_data:
+            abort(404)
+        debug_info = st_data.get("_debug", {})
+        summary = _load_json(basedir, "summary.json")
+        updated = summary.get("updated", 0)
+        return render_template(
+            "subtask.html",
+            view=view,
+            view_cfg=VIEWS[view],
+            name=name,
+            subtask=subtask,
+            debug_info=debug_info,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
+
     @app.route("/<view>/request/<path:name>")
     @app.route("/<view>/<path:name>")
     def request_detail(view, name):
@@ -440,6 +475,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             view_cfg=VIEWS[view],
             name=name,
             subtasks=subtasks,
+            subtask_count=sum(1 for k in subtasks if not k.startswith("_")),
             req_totals=req_totals,
             prio_info=prio_info,
             metadata=metadata,
@@ -866,6 +902,20 @@ def create_app(config_path="/etc/gwmsmon.conf"):
                 data = _load_json(ts_dir, fname)
                 if data.get("series"):
                     combined[block] = data["series"]
+            from flask import jsonify
+            resp = jsonify(combined)
+            resp.headers["Cache-Control"] = "max-age=120, public"
+            return resp
+        elif kind == "sites" and len(parts) == 1:
+            # Combined endpoint: merge all site timeseries into one response
+            ts_dir = os.path.join(basedir, "timeseries")
+            combined = {}
+            for fname in os.listdir(ts_dir):
+                if fname.startswith("site_") and fname.endswith(".json"):
+                    site_name = fname[5:-5]  # strip "site_" and ".json"
+                    data = _load_json(ts_dir, fname)
+                    if data.get("series"):
+                        combined[site_name] = data["series"]
             from flask import jsonify
             resp = jsonify(combined)
             resp.headers["Cache-Control"] = "max-age=120, public"

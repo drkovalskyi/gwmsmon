@@ -298,6 +298,28 @@ class State:
                     ss.setdefault("UniquePressure", 0)
                     ss["UniquePressure"] += 1
 
+        # Per-subtask debug breakdown: group by unique job config
+        walltime = str(job.get("OriginalMaxWallTimeMins", 0))
+        memory = str(job.get("OriginalMemory", 0))
+        req_cpus = str(job.get("RequestCpus", 1))
+        desired_sites_raw = job.get("DESIRED_Sites", "")
+        desired_sites = ",".join(sorted(
+            s.strip() for s in desired_sites_raw.split(",") if s.strip()
+        )) if desired_sites_raw else ""
+        cfg_key = "||".join([walltime, memory, req_cpus,
+                             desired_sites, schedd_name])
+        dbg = _ensure(view["workflows"], request, subtask,
+                      "_debug", cfg_key)
+        for k in _zero_counts():
+            dbg.setdefault(k, 0)
+        _add_counts(dbg, status, cpus)
+        if "Schedd" not in dbg:
+            dbg["Schedd"] = schedd_name
+            dbg["WallTime"] = int(walltime)
+            dbg["Memory"] = int(memory)
+            dbg["Cpus"] = int(req_cpus)
+            dbg["DesiredSites"] = desired_sites
+
         # view totals
         _add_counts(view["totals"], status, cpus)
 

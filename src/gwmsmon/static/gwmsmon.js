@@ -768,6 +768,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var aligned = buildAligned(series, seriesKeys, xMin);
     if (!aligned) return;
     if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
+    else if (interval >= 24*3600) aligned = downsampleAligned(aligned, 1800);
     extendToEdges(aligned, xMin, xMax);
 
     var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
@@ -1293,6 +1294,166 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     new uPlot(opts, aligned.data, el);
   }
 
+  // Fairshare stacked chart: accounting group CPU usage over 7 days
+  var FAIRSHARE_CATS = ['highprio', 'tier0', 'production', 'analysis', 'other'];
+  var FAIRSHARE_COLORS = {
+    highprio: '#111111',
+    tier0: '#FA6400',
+    production: '#5794F2',
+    analysis: '#E0B402',
+    other: '#56A64B',
+  };
+  var FAIRSHARE_FILLS = {
+    highprio: '#888888',
+    tier0: '#FDB280',
+    production: '#ABCAF9',
+    analysis: '#F0DA81',
+    other: '#ABD3A5',
+  };
+  var FAIRSHARE_LABELS = {
+    highprio: 'High Priority',
+    tier0: 'Tier-0',
+    production: 'Production',
+    analysis: 'Analysis',
+    other: 'Other',
+  };
+
+  function renderFairshareChart(el, data) {
+    var loader = el.querySelector('.chart-loading');
+    if (loader) loader.remove();
+
+    var label = document.createElement('div');
+    label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:' + AXIS_LABEL_STROKE + ';padding:2px 0 0';
+    label.textContent = '7 Days — CPUs by Accounting Group';
+    el.appendChild(label);
+
+    var interval = 7 * 86400;
+    var xMax = Math.floor(Date.now() / 1000);
+    var xMin = xMax - interval;
+
+    // Build aligned from all categories using CpusInUse
+    var series = {};
+    FAIRSHARE_CATS.forEach(function(cat) {
+      if (data[cat] && data[cat].CpusInUse) {
+        series[cat] = data[cat].CpusInUse;
+      }
+    });
+    var keys = FAIRSHARE_CATS.filter(function(c) { return series[c]; });
+    if (!keys.length) return;
+
+    var aligned = buildAligned(series, keys, xMin);
+    if (!aligned) return;
+    aligned = downsampleAligned(aligned, 3600);
+    extendToEdges(aligned, xMin, xMax);
+
+    // Build cumulative stacks: other(bottom) → analysis → production → tier0 → highprio(top)
+    var n = aligned.data[0].length;
+    var rawArrays = {};
+    keys.forEach(function(k, i) { rawArrays[k] = aligned.data[i + 1]; });
+
+    var stackOrder = ['other', 'analysis', 'production', 'tier0', 'highprio'];
+    var cumArrays = {};
+    var prev = null;
+    var cpusMax = 1;
+    stackOrder.forEach(function(cat) {
+      var arr = rawArrays[cat];
+      var cum = new Float64Array(n);
+      for (var i = 0; i < n; i++) {
+        cum[i] = (prev ? prev[i] : 0) + (arr ? (arr[i] || 0) : 0);
+        if (cum[i] > cpusMax) cpusMax = cum[i];
+      }
+      cumArrays[cat] = cum;
+      prev = cum;
+    });
+
+    var yMax = alignedCpusMax(cpusMax);
+
+    // uPlot data: outermost (top of stack) first
+    var uData = [aligned.data[0]];
+    var uSeries = [{}];
+    for (var si = stackOrder.length - 1; si >= 0; si--) {
+      var cat = stackOrder[si];
+      uData.push(cumArrays[cat]);
+      var color = FAIRSHARE_COLORS[cat] || '#888';
+      var fillColor = FAIRSHARE_FILLS[cat] || color + '80';
+      uSeries.push({
+        scale: 'y',
+        stroke: color,
+        fill: fillColor,
+        width: 1.5,
+        label: FAIRSHARE_LABELS[cat] || cat,
+        _color: color,
+      });
+    }
+
+    // Tooltip: show raw (non-cumulative) values
+    function fairshareTooltip() {
+      var tip;
+      return {
+        hooks: {
+          init: function(u) {
+            tip = document.createElement('div');
+            tip.className = 'chart-tooltip';
+            u.over.appendChild(tip);
+          },
+          setCursor: function(u) {
+            var idx = u.cursor.idx;
+            if (idx == null) { tip.style.display = 'none'; return; }
+            var ts = u.data[0][idx];
+            var d = new Date(ts * 1000);
+            var time = ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+            var html = '<b>' + d.toLocaleDateString() + ' ' + time + '</b>';
+            // Series are in reverse stack order; compute raw from cumulative diffs
+            for (var si = 1; si < u.series.length; si++) {
+              var cumVal = u.data[si][idx];
+              var nextVal = (si + 1 < u.data.length) ? u.data[si + 1][idx] : 0;
+              var raw = cumVal - nextVal;
+              if (isNaN(raw)) raw = 0;
+              var color = u.series[si]._color || u.series[si].stroke;
+              if (typeof color === 'function') color = color(u, si);
+              html += '<br><span style="color:' + color + '">\u25CF</span> ' + u.series[si].label + ': ' + fmtCount(raw);
+            }
+            tip.innerHTML = html;
+            tip.style.display = 'block';
+            var left = u.cursor.left + 12;
+            if (left + tip.offsetWidth > u.over.offsetWidth)
+              left = u.cursor.left - tip.offsetWidth - 12;
+            tip.style.left = left + 'px';
+            tip.style.top = '4px';
+          },
+        }
+      };
+    }
+
+    var opts = {
+      width: CHART_W,
+      height: SIMPLE_CHART_H,
+      cursor: { show: true },
+      legend: { show: false },
+      padding: [10, 8, 2, LEFT_PAD],
+      plugins: [fairshareTooltip()],
+      scales: {
+        x: { min: xMin, max: xMax },
+        y: { min: 0, max: yMax, auto: false },
+      },
+      axes: [
+        { size: XAXIS_H, font: '10px sans-serif', values: fmtDateSplits, stroke: AXIS_STROKE },
+        {
+          scale: 'y',
+          size: 50,
+          font: '10px sans-serif',
+          stroke: AXIS_LABEL_STROKE,
+          ticks: { size: 0 },
+          splits: gridSplits,
+          values: function(self, ticks) { return ticks.map(fmtCount); },
+        },
+      ],
+      series: uSeries,
+    };
+
+    new uPlot(opts, uData, el);
+  }
+
   function renderCharts() {
     var charts = document.querySelectorAll('.chart');
     if (!charts.length) return;
@@ -1313,6 +1474,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       } else if (el.dataset.chartType === 'site-monitor') {
         simpleCharts.push(el); // group for fetching, render differently
       } else if (el.dataset.chartType === 'status-metric') {
+        // handled separately — uses rawData
+      } else if (el.dataset.chartType === 'fairshare-stacked') {
         // handled separately — uses rawData
       } else {
         dualCharts.push(el);
@@ -1409,6 +1572,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
                   if (rawData[s]) renderStackedChart(el, rawData[s], el.dataset.stackedMetric, el.dataset.stackedLabel || '');
                 } else if (el.dataset.chartType === 'status-metric') {
                   if (rawData[s]) renderStatusMetricChart(el, rawData[s]);
+                } else if (el.dataset.chartType === 'fairshare-stacked') {
+                  if (rawData[s]) renderFairshareChart(el, rawData[s]);
                 } else {
                   if (allData[s]) renderChartWithSharedScale(el, allData[s], sharedRatioYMax, sharedCpusYMax);
                 }
@@ -1449,6 +1614,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       var aligned = buildAligned(series, keys, xMin);
       if (!aligned) return;
       if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
+      else if (interval >= 24*3600) aligned = downsampleAligned(aligned, 1800);
       extendToEdges(aligned, xMin, xMax);
 
       var timestamps = aligned.data[0];

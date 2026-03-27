@@ -906,6 +906,20 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             resp = jsonify(combined)
             resp.headers["Cache-Control"] = "max-age=120, public"
             return resp
+        elif kind == "fairshare" and len(parts) == 1:
+            # Combined endpoint: merge all fairshare timeseries
+            ts_dir = os.path.join(basedir, "timeseries")
+            combined = {}
+            for fname in os.listdir(ts_dir):
+                if fname.startswith("fairshare_") and fname.endswith(".json"):
+                    cat = fname[10:-5]  # strip "fairshare_" and ".json"
+                    data = _load_json(ts_dir, fname)
+                    if data.get("series"):
+                        combined[cat] = data["series"]
+            from flask import jsonify
+            resp = jsonify(combined)
+            resp.headers["Cache-Control"] = "max-age=120, public"
+            return resp
         elif kind == "sites" and len(parts) == 1:
             # Combined endpoint: merge all site timeseries into one response
             ts_dir = os.path.join(basedir, "timeseries")

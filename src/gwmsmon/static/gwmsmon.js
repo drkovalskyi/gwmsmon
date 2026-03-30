@@ -1149,6 +1149,20 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     new uPlot(opts, data, el);
   }
 
+  // Exponential moving average: smooths noisy series
+  function emaSmooth(arr, alpha) {
+    var out = new Float64Array(arr.length);
+    var prev = NaN;
+    for (var i = 0; i < arr.length; i++) {
+      var v = arr[i];
+      if (isNaN(v)) { out[i] = prev; continue; }
+      if (isNaN(prev)) { prev = v; out[i] = v; continue; }
+      prev = alpha * v + (1 - alpha) * prev;
+      out[i] = prev;
+    }
+    return out;
+  }
+
   // Site monitor chart: stacked CPUs by category (left) + % metrics (right)
   function renderSiteMonitorChart(el, series) {
     var interval = 7 * 24 * 3600;
@@ -1186,6 +1200,12 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       cumTier0[i] = cumProd[i] + (tier0[i] || 0);
       if (cumTier0[i] > cpusMax) cpusMax = cumTier0[i];
     }
+    // Smooth % metrics with EMA (alpha=0.15 ~ 6-point window)
+    var EMA_ALPHA = 0.15;
+    aligned.data[5] = emaSmooth(aligned.data[5], EMA_ALPHA); // FailureRate
+    aligned.data[6] = emaSmooth(aligned.data[6], EMA_ALPHA); // CPUEff
+    aligned.data[7] = emaSmooth(aligned.data[7], EMA_ALPHA); // ProcEff
+
     // Keep raw values for tooltip
     var rawData = [tier0, prod, ana, other];
     aligned.data[1] = cumTier0;  // tier0 on top

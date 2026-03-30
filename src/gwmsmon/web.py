@@ -308,6 +308,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             view=view,
             view_cfg=view_cfg,
             totals=summary.get("totals", {}),
+            averages_7d=summary.get("averages_7d", {}),
             workflows=sorted_wf,
             sites=sorted_sites,
             exit_codes=exit_codes,

@@ -7,52 +7,51 @@
 </style>
 <h1>{{ view_cfg.title }} Overview</h1>
 
-<div class="stats-row" id="stats-row">
-  <div class="stat">
-    <div class="stat-value" id="stat-running">{{ totals.get('Running', 0)|fmt }}</div>
-    <div class="stat-label">Running Jobs</div>
-  </div>
-  <div class="stat">
-    <div class="stat-value" id="stat-idle">{{ totals.get('MatchingIdle', 0)|fmt }}</div>
-    <div class="stat-label">Idle Jobs</div>
-  </div>
-  <div class="stat">
-    <div class="stat-value" id="stat-cpus-use">{{ totals.get('CpusInUse', 0)|fmt }}</div>
-    <div class="stat-label">CPUs in Use</div>
-  </div>
-  <div class="stat">
-    <div class="stat-value" id="stat-cpus-pend">{{ totals.get('CpusPending', 0)|fmt }}</div>
-    <div class="stat-label">CPUs Pending</div>
-  </div>
-  <div class="stat">
-    <div class="stat-value" id="stat-count">{{ workflows|length|fmt }}</div>
-    <div class="stat-label">{{ view_cfg.entity_label }}s</div>
-  </div>
-  {% set w7d = exit_codes.get('windows', {}).get('7d', {}) if exit_codes else {} %}
-  {% if w7d.get('total', 0) > 0 %}
-  <a href="/{{ view }}/completed" class="stat" style="text-decoration:none">
-    <div class="stat-value" id="stat-done">{{ w7d.total|fmt }}</div>
-    <div class="stat-label">Completed (7d)</div>
-  </a>
-  <a href="/{{ view }}/completed" class="stat" style="text-decoration:none">
-    <div class="stat-value {% if w7d.failure_rate > 0.05 %}warn{% endif %}" id="stat-fail-rate">
-      {{ (w7d.failure_rate * 100)|round(1) }}%
-    </div>
-    <div class="stat-label">Failed (7d)</div>
-  </a>
-  {% set ve = exit_codes.get('efficiency', {}).get('7d', {}) %}
-  {% if ve %}
-  <div class="stat">
-    <div class="stat-value {% if ve.running_eff < 0.5 %}warn{% endif %}" id="stat-cpu-eff">{{ (ve.running_eff * 100)|round(1) }}%</div>
-    <div class="stat-label">CPU Eff (7d)</div>
-  </div>
-  <div class="stat">
-    <div class="stat-value {% if ve.processing_eff < 0.8 %}warn{% endif %}" id="stat-proc-eff">{{ (ve.processing_eff * 100)|round(1) }}%</div>
-    <div class="stat-label">Proc Eff (7d)</div>
-  </div>
-  {% endif %}
-  {% endif %}
-</div>
+{% set w1h = exit_codes.get('windows', {}).get('1h', {}) if exit_codes else {} %}
+{% set w7d = exit_codes.get('windows', {}).get('7d', {}) if exit_codes else {} %}
+{% set ve1h = exit_codes.get('efficiency', {}).get('1h', {}) if exit_codes else {} %}
+{% set ve7d = exit_codes.get('efficiency', {}).get('7d', {}) if exit_codes else {} %}
+{% set a7d = averages_7d if averages_7d is defined else {} %}
+<table class="data-table compact" id="stats-table" style="width:auto; margin-bottom:16px">
+  <thead><tr>
+    <th></th>
+    <th style="text-align:right">Running</th>
+    <th style="text-align:right">Idle</th>
+    <th style="text-align:right">CPUs Use</th>
+    <th style="text-align:right">CPUs Pend</th>
+    <th style="text-align:right">{{ view_cfg.entity_label }}s</th>
+    <th style="text-align:right">Completed</th>
+    <th style="text-align:right">Failed</th>
+    <th style="text-align:right">CPU Eff</th>
+    <th style="text-align:right">Proc Eff</th>
+  </tr></thead>
+  <tbody>
+  <tr>
+    <td style="font-weight:600">Current</td>
+    <td style="text-align:right" id="stat-running">{{ totals.get('Running', 0)|fmt }}</td>
+    <td style="text-align:right" id="stat-idle">{{ totals.get('MatchingIdle', 0)|fmt }}</td>
+    <td style="text-align:right" id="stat-cpus-use">{{ totals.get('CpusInUse', 0)|fmt }}</td>
+    <td style="text-align:right" id="stat-cpus-pend">{{ totals.get('CpusPending', 0)|fmt }}</td>
+    <td style="text-align:right" id="stat-count">{{ workflows|length|fmt }}</td>
+    <td style="text-align:right" id="stat-done">{% if w1h.get('total') %}{{ w1h.total|fmt }}{% endif %}</td>
+    <td style="text-align:right" id="stat-fail-rate" class="{% if w1h.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if w1h.get('total') %}{{ (w1h.failure_rate * 100)|round(1) }}%{% endif %}</td>
+    <td style="text-align:right" id="stat-cpu-eff" class="{% if ve1h.get('running_eff', 1) < 0.5 %}warn{% endif %}">{% if ve1h %}{{ (ve1h.running_eff * 100)|round(1) }}%{% endif %}</td>
+    <td style="text-align:right" id="stat-proc-eff" class="{% if ve1h.get('processing_eff', 1) < 0.8 %}warn{% endif %}">{% if ve1h %}{{ (ve1h.processing_eff * 100)|round(1) }}%{% endif %}</td>
+  </tr>
+  <tr style="color:var(--text-muted)">
+    <td style="font-weight:600">7d avg</td>
+    <td style="text-align:right">{{ a7d.get('Running', 0)|fmt }}</td>
+    <td style="text-align:right">{{ a7d.get('MatchingIdle', 0)|fmt }}</td>
+    <td style="text-align:right">{{ a7d.get('CpusInUse', 0)|fmt }}</td>
+    <td style="text-align:right">{{ a7d.get('CpusPending', 0)|fmt }}</td>
+    <td style="text-align:right">{{ wf_completion|length|fmt if wf_completion is defined else '' }}</td>
+    <td style="text-align:right">{% if w7d.get('total') %}{{ w7d.total|fmt }}{% endif %}</td>
+    <td style="text-align:right" class="{% if w7d.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if w7d.get('total') %}{{ (w7d.failure_rate * 100)|round(1) }}%{% endif %}</td>
+    <td style="text-align:right" class="{% if ve7d.get('running_eff', 1) < 0.5 %}warn{% endif %}">{% if ve7d %}{{ (ve7d.running_eff * 100)|round(1) }}%{% endif %}</td>
+    <td style="text-align:right" class="{% if ve7d.get('processing_eff', 1) < 0.8 %}warn{% endif %}">{% if ve7d %}{{ (ve7d.processing_eff * 100)|round(1) }}%{% endif %}</td>
+  </tr>
+  </tbody>
+</table>
 
 {% if view == 'prodview' %}
 {# === PRODVIEW: Tabbed layout === #}

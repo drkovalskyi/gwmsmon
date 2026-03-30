@@ -1894,10 +1894,23 @@ class State:
 
             view_data = snap[view]
 
+            # Compute 7d averages from timeseries
+            cutoff_7d = time.time() - 7 * 86400
+            ts_summary = self.timeseries.get(view, {}).get(
+                "_summary", {})
+            avgs_7d = {}
+            for key in ("Running", "MatchingIdle",
+                        "CpusInUse", "CpusPending"):
+                pts = ts_summary.get(key, {"t": [], "v": []})
+                vals = [v for t, v in zip(pts["t"], pts["v"])
+                        if t >= cutoff_7d]
+                avgs_7d[key] = round(sum(vals) / len(vals)) if vals else 0
+
             summary_out = {
                 "updated": self.updated,
                 "schedds": view_data.get("schedds", {}),
                 "totals": view_data.get("totals", {}),
+                "averages_7d": avgs_7d,
             }
             if view == "prodview":
                 summary_out["priorities"] = view_data.get("priorities", {})

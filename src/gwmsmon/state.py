@@ -2066,11 +2066,28 @@ class State:
             }
             pv["totals"] = pv_totals
 
+            # Aggregate globalview users into flat per-user summary
+            user_agg = {}
+            for owner, tasks in gv.get("users", {}).items():
+                u = user_agg.setdefault(owner, {
+                    "Running": 0, "MatchingIdle": 0, "Held": 0,
+                    "CpusInUse": 0, "CpusPending": 0,
+                })
+                for task, task_data in tasks.items():
+                    if task.startswith("_"):
+                        continue
+                    s = task_data.get("Summary", {})
+                    u["Running"] += s.get("Running", 0)
+                    u["MatchingIdle"] += s.get("MatchingIdle", 0)
+                    u["Held"] += s.get("Held", 0)
+                    u["CpusInUse"] += s.get("CpusInUse", 0)
+                    u["CpusPending"] += s.get("CpusPending", 0)
+
             _atomic_json(os.path.join(poolview_dir, "summary.json"), {
                 "updated": self.updated,
                 "schedds": pv.get("schedds", {}),
                 "negotiator": gv.get("negotiator", {}),
-                "user_summary": gv.get("user_summary", {}),
+                "user_summary": user_agg,
                 "fairshare": pv.get("fairshare", {}),
                 "totals": pv_totals,
             })

@@ -1360,34 +1360,40 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     aligned = downsampleAligned(aligned, 3600);
     extendToEdges(aligned, xMin, xMax);
 
-    // Build cumulative stacks: other(bottom) → analysis → production → tier0 → highprio(top)
     var n = aligned.data[0].length;
     var rawArrays = {};
     keys.forEach(function(k, i) { rawArrays[k] = aligned.data[i + 1]; });
 
     var stackOrder = ['other', 'analysis', 'production', 'tier0', 'highprio'];
-    var cumArrays = {};
-    var prev = null;
-    var cpusMax = 1;
-    stackOrder.forEach(function(cat) {
-      var arr = rawArrays[cat];
-      var cum = new Float64Array(n);
-      for (var i = 0; i < n; i++) {
-        cum[i] = (prev ? prev[i] : 0) + (arr ? (arr[i] || 0) : 0);
-        if (cum[i] > cpusMax) cpusMax = cum[i];
-      }
-      cumArrays[cat] = cum;
-      prev = cum;
-    });
+    // seriesOrder: reverse of stackOrder (top first) — matches uPlot data index
+    var seriesOrder = stackOrder.slice().reverse();
 
-    var yMax = alignedCpusMax(cpusMax);
+    // Recompute cumulative stack and uPlot data for given visible set
+    function buildStack(visibleSet) {
+      var cum = {};
+      var prev = null;
+      var maxV = 1;
+      stackOrder.forEach(function(cat) {
+        var arr = rawArrays[cat];
+        var c = new Float64Array(n);
+        var show = visibleSet ? visibleSet.has(cat) : true;
+        for (var i = 0; i < n; i++) {
+          c[i] = (prev ? prev[i] : 0) + (show && arr ? (arr[i] || 0) : 0);
+          if (c[i] > maxV) maxV = c[i];
+        }
+        cum[cat] = c;
+        prev = c;
+      });
+      var d = [aligned.data[0]];
+      seriesOrder.forEach(function(cat) { d.push(cum[cat]); });
+      return { data: d, yMax: alignedCpusMax(maxV) };
+    }
 
-    // uPlot data: outermost (top of stack) first
-    var uData = [aligned.data[0]];
+    var initial = buildStack(null);
+
+    // uPlot series definitions
     var uSeries = [{}];
-    for (var si = stackOrder.length - 1; si >= 0; si--) {
-      var cat = stackOrder[si];
-      uData.push(cumArrays[cat]);
+    seriesOrder.forEach(function(cat) {
       var color = FAIRSHARE_COLORS[cat] || '#888';
       var fillColor = FAIRSHARE_FILLS[cat] || color + '80';
       uSeries.push({
@@ -1397,8 +1403,9 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         width: 1.5,
         label: FAIRSHARE_LABELS[cat] || cat,
         _color: color,
+        _cat: cat,
       });
-    }
+    });
 
     // Tooltip: show raw (non-cumulative) values
     function fairshareTooltip() {
@@ -1417,8 +1424,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
             var d = new Date(ts * 1000);
             var time = ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
             var html = '<b>' + d.toLocaleDateString() + ' ' + time + '</b>';
-            // Series are in reverse stack order; compute raw from cumulative diffs
             for (var si = 1; si < u.series.length; si++) {
+              if (!u.series[si].show) continue;
               var cumVal = u.data[si][idx];
               var nextVal = (si + 1 < u.data.length) ? u.data[si + 1][idx] : 0;
               var raw = cumVal - nextVal;
@@ -1448,7 +1455,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       plugins: [fairshareTooltip()],
       scales: {
         x: { min: xMin, max: xMax },
-        y: { min: 0, max: yMax, auto: false },
+        y: { min: 0, max: initial.yMax, auto: false },
       },
       axes: [
         { size: XAXIS_H, font: '10px sans-serif', values: fmtDateSplits, stroke: AXIS_STROKE },
@@ -1465,7 +1472,46 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       series: uSeries,
     };
 
-    new uPlot(opts, uData, el);
+    // Chart container for destroy/recreate
+    var chartWrap = document.createElement('div');
+    el.appendChild(chartWrap);
+    var chart = new uPlot(opts, initial.data, chartWrap);
+
+    function rebuildChart(rebuilt) {
+      chart.destroy();
+      opts.scales.y.max = rebuilt.yMax;
+      chart = new uPlot(opts, rebuilt.data, chartWrap);
+    }
+
+    // Click-to-isolate legend
+    var legendDiv = document.createElement('div');
+    legendDiv.style.cssText = 'display:flex;gap:12px;justify-content:center;padding:4px 0;font-size:11px;cursor:pointer';
+    var soloMode = null;
+
+    seriesOrder.forEach(function(cat) {
+      var item = document.createElement('span');
+      var color = FAIRSHARE_COLORS[cat] || '#888';
+      item.innerHTML = '<span style="color:' + color + '">\u25CF</span> ' + (FAIRSHARE_LABELS[cat] || cat);
+      item.dataset.cat = cat;
+      item.style.opacity = '1';
+      item.addEventListener('click', function() {
+        if (soloMode === cat) {
+          soloMode = null;
+          rebuildChart(buildStack(null));
+          legendDiv.querySelectorAll('span[data-cat]').forEach(function(s) { s.style.opacity = '1'; });
+        } else {
+          soloMode = cat;
+          rebuildChart(buildStack(new Set([cat])));
+          legendDiv.querySelectorAll('span[data-cat]').forEach(function(s) {
+            s.style.opacity = s.dataset.cat === cat ? '1' : '0.3';
+          });
+        }
+      });
+      legendDiv.appendChild(item);
+    });
+    el.style.height = 'auto';
+    el.style.overflow = 'visible';
+    el.appendChild(legendDiv);
   }
 
   function renderCharts() {

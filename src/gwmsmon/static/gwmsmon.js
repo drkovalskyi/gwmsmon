@@ -921,8 +921,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var failure = data.failure;
     if (!ts || !ts.length) return;
 
-    // Aggregate 10-min buckets into 4-hour buckets
-    var hourBucket = 4 * 3600;
+    // Aggregate 10-min buckets into 1-hour buckets
+    var hourBucket = 3600;
     var hourMap = {};
     for (var i = 0; i < ts.length; i++) {
       var hk = Math.floor(ts[i] / hourBucket) * hourBucket;
@@ -941,14 +941,16 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       failArr[i] = h.f;
     }
 
+    // EMA smoothing
+    var HIST_EMA = 0.2;
+    var totalEma = emaSmooth(totalArr, HIST_EMA);
+    var failEma = emaSmooth(failArr, HIST_EMA);
+
     var yMax = alignedCpusMax(arrMax(totalArr));
-    var bucketSize = hourBucket;
 
-    // Fixed 7-day x-range: right edge = last bucket + size, left edge = 168h before
-    var xMax = ts[ts.length - 1] + bucketSize;
+    // Fixed 7-day x-range
+    var xMax = ts[ts.length - 1] + hourBucket;
     var xMin = xMax - 7 * 86400;
-
-    var stepPaths = uPlot.paths.stepped({align: 1});
 
     var opts = {
       width: CHART_W,
@@ -975,26 +977,18 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       ],
       series: [
         {},
-        {
-          scale: 'y',
-          stroke: isDark ? '#2050A0' : '#1A4FA0',
-          fill: SUCCESS_COLOR + '90',
-          width: 1.5,
-          label: 'Success',
-          paths: stepPaths,
-        },
-        {
-          scale: 'y',
-          stroke: isDark ? '#CC6000' : '#B04000',
-          fill: FAILURE_COLOR + '90',
-          width: 1.5,
-          label: 'Failure',
-          paths: stepPaths,
-        },
+        // Raw success — faint
+        { scale: 'y', stroke: (isDark ? '#2050A0' : '#1A4FA0') + '30', width: 1, label: 'Success (raw)', points: {show: false} },
+        // Raw failure — faint
+        { scale: 'y', stroke: (isDark ? '#CC6000' : '#B04000') + '30', width: 1, label: 'Failure (raw)', points: {show: false} },
+        // EMA success — bold with fill
+        { scale: 'y', stroke: isDark ? '#2050A0' : '#1A4FA0', fill: SUCCESS_COLOR + '30', width: 2, label: 'Success' },
+        // EMA failure — bold with fill
+        { scale: 'y', stroke: isDark ? '#CC6000' : '#B04000', fill: FAILURE_COLOR + '30', width: 2, label: 'Failure' },
       ],
     };
 
-    new uPlot(opts, [timestamps, totalArr, failArr], el);
+    new uPlot(opts, [timestamps, totalArr, failArr, totalEma, failEma], el);
   }
 
   // Priority block colors — exact old service palette

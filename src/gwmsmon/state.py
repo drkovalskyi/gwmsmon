@@ -741,7 +741,7 @@ class State:
                     rec_list = (_ensure(self.failed_job_records,
                                         "prodview", site)
                                 .setdefault(request, []))
-                    if len(rec_list) < 200:
+                    if len(rec_list) < 5000:
                         starts = job.get("NumJobStarts", 1)
                         # Extract short host from LastRemoteHost
                         # Format: slot1_1@glidein_...@hostname.domain
@@ -1521,7 +1521,7 @@ class State:
             all_failed.sort(key=lambda x: -x.get("ts", 0))
             _atomic_json(os.path.join(basedir, "failed_jobs.json"), {
                 "updated": self.updated,
-                "jobs": all_failed[:5000],
+                "jobs": all_failed,
             })
 
     def flush_exit_code_state(self, cfg):

@@ -203,23 +203,23 @@
       </tr>
     </thead>
     <tbody>
-    {% for name, data in sites %}
-    {% set sec = site_exit_codes.get(name, {}).get('1h', {}) %}
-    {% set sec7 = site_exit_codes.get(name, {}).get('7d', {}) %}
+    {% for sname, data in sites %}
+    {% set sec = site_exit_codes.get(sname, {}).get('1h', {}) %}
+    {% set sec7 = site_exit_codes.get(sname, {}).get('7d', {}) %}
     <tr>
-      <td><a href="/{{ view }}/site/{{ name }}">{{ name }}</a></td>
+      <td><a href="/{{ view }}/site/{{ sname }}">{{ sname }}</a></td>
       <td>{{ data.get('Running', 0)|fmt }}</td>
       <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>
       <td>{{ data.get('CpusInUse', 0)|fmt }}</td>
       <td>{{ data.get('CpusPending', 0)|fmt }}</td>
       <td>{{ data.get('UniquePressure', 0)|fmt }}</td>
       <td>{{ sec.get('total', 0)|fmt }}</td>
-      <td>{% if sec.get('failures', 0) %}<a href="/{{ view }}/failed?request={{ name }}&site={{ name }}">{{ sec.failures|fmt }}</a>{% else %}0{% endif %}</td>
+      <td>{% if sec.get('failures', 0) %}<a href="/{{ view }}/failed?request={{ name }}&site={{ sname }}">{{ sec.failures|fmt }}</a>{% else %}0{% endif %}</td>
       <td class="{% if sec.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.failure_rate * 100)|round(1) }}%{% endif %}</td>
       <td class="{% if sec.get('running_eff', 0) and sec.running_eff < 0.5 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.get('running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
       <td class="{% if sec.get('processing_eff', 0) and sec.processing_eff < 0.8 %}warn{% endif %}">{% if sec.get('total', 0) %}{{ (sec.get('processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>
       <td>{{ sec7.get('total', 0)|fmt }}</td>
-      <td>{% if sec7.get('failures', 0) %}<a href="/{{ view }}/failed?request={{ name }}&site={{ name }}">{{ sec7.failures|fmt }}</a>{% else %}0{% endif %}</td>
+      <td>{% if sec7.get('failures', 0) %}<a href="/{{ view }}/failed?request={{ name }}&site={{ sname }}">{{ sec7.failures|fmt }}</a>{% else %}0{% endif %}</td>
       <td class="{% if sec7.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if sec7.get('total', 0) %}{{ (sec7.failure_rate * 100)|round(1) }}%{% endif %}</td>
       <td class="{% if sec7.get('running_eff', 0) and sec7.running_eff < 0.5 %}warn{% endif %}">{% if sec7.get('total', 0) %}{{ (sec7.get('running_eff', 0) * 100)|round(1) }}%{% endif %}</td>
       <td class="{% if sec7.get('processing_eff', 0) and sec7.processing_eff < 0.8 %}warn{% endif %}">{% if sec7.get('total', 0) %}{{ (sec7.get('processing_eff', 0) * 100)|round(1) }}%{% endif %}</td>

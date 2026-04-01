@@ -655,6 +655,36 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         for job in jobs:
             job["desc"] = _describe_exit_code(str(job.get("code", "")))
 
+        # Aggregate by exit code
+        by_code = {}
+        for j in jobs:
+            c = str(j.get("code", ""))
+            e = by_code.setdefault(c, {"count": 0, "desc": j.get("desc", "")})
+            e["count"] += 1
+        code_list = sorted(by_code.items(), key=lambda x: -x[1]["count"])
+
+        # Aggregate by site
+        by_site = {}
+        for j in jobs:
+            s = j.get("site", "unknown")
+            e = by_site.setdefault(s, {"count": 0, "codes": {}})
+            e["count"] += 1
+            c = str(j.get("code", ""))
+            e["codes"][c] = e["codes"].get(c, 0) + 1
+        site_list = sorted(by_site.items(), key=lambda x: -x[1]["count"])
+
+        # Aggregate by request
+        by_request = {}
+        for j in jobs:
+            r = j.get("request", "unknown")
+            e = by_request.setdefault(r, {"count": 0, "codes": {}})
+            e["count"] += 1
+            c = str(j.get("code", ""))
+            e["codes"][c] = e["codes"].get(c, 0) + 1
+        request_list = sorted(by_request.items(), key=lambda x: -x[1]["count"])
+
+        f_tab = req.args.get("tab", "summary")
+
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
         return render_template(
@@ -667,6 +697,10 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             filter_host=f_host,
             filter_has_log=f_has_log,
             filter_hours=str(hours),
+            active_tab=f_tab,
+            code_list=code_list,
+            site_list=site_list,
+            request_list=request_list,
             jobs=jobs,
             unified=True,
             updated=updated,

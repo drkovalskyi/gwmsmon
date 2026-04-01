@@ -1023,8 +1023,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     });
     var timestamps = Object.keys(tSet).map(Number).sort(function(a,b){return a-b;});
     if (!timestamps.length) return;
-    // Extend to edges so lines fill the chart
-    if (timestamps[0] > xMin) timestamps.unshift(xMin);
+    // Extend right edge only — don't pad left to avoid 0-start
     if (timestamps[timestamps.length - 1] < xMax) timestamps.push(xMax);
 
     // Build per-block raw value arrays aligned to timestamps

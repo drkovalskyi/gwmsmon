@@ -4,6 +4,8 @@
 <style>
 #wf-table td:not(:first-child), #wf-table th:not(:first-child),
 #sites-table td:not(:first-child), #sites-table th:not(:first-child) { text-align: right; }
+#prio-table { width: auto; }
+#prio-table td:nth-child(n+3), #prio-table th:nth-child(n+3) { text-align: right; }
 </style>
 <h1>{{ view_cfg.title }} Overview</h1>
 
@@ -273,7 +275,7 @@
   {% if priorities %}
   <details class="section" open data-section="{{ view }}_priority">
     <summary><h2>Priority Blocks</h2></summary>
-    <table class="data-table sortable" id="prio-table" data-sort-default="3:desc">
+    <table class="data-table sortable" id="prio-table" data-sort-default="0:asc">
       <thead><tr>
         <th>Block</th>
         <th>Priority Range</th>
@@ -368,7 +370,7 @@
 {% if priorities %}
 <details class="section" open data-section="{{ view }}_priority">
   <summary><h2>Priority Blocks</h2></summary>
-  <table class="data-table sortable" id="prio-table" data-sort-default="3:desc">
+  <table class="data-table sortable" id="prio-table" data-sort-default="0:asc">
     <thead><tr>
       <th>Block</th>
       <th>Priority Range</th>

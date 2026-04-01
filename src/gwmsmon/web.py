@@ -580,6 +580,16 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         site_completion = all_site_ec.get("sites", {}).get(name, {})
         site_exit_codes = _annotate_exit_codes(
             {"codes": site_completion.pop("codes", {})})
+        site_codes_7d = site_completion.pop("codes_7d", {})
+        # Annotate 7d codes
+        site_ec_7d = []
+        for code, count in sorted(site_codes_7d.items(),
+                                   key=lambda x: -x[1]):
+            if code != "0":
+                site_ec_7d.append({
+                    "code": code, "count": count,
+                    "desc": _describe_exit_code(code),
+                })
 
         # Failed job records (for linking Fail count)
         failed_jobs_data = _load_json(
@@ -600,6 +610,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             site_req_ec=site_req_ec,
             site_completion=site_completion,
             site_exit_codes=site_exit_codes,
+            site_ec_7d=site_ec_7d,
             failed_requests=failed_requests,
             updated=updated,
             freshness=_freshness(updated),

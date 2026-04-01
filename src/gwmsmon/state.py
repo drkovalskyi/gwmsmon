@@ -1357,8 +1357,10 @@ class State:
             # Also build completion cross-reference: {wf: {site: [done, fail]}}
             view_site_ec = {}
             site_codes_1h = {}  # {site: {code: count}} for 1h window
+            site_codes_7d = {}  # {site: {code: count}} for 7d window
             completion_xref = {}  # {wf: {site: [done_1h, fail_1h]}}
             cutoff_1h = now_site - EXIT_CODE_WINDOWS["1h"]
+            cutoff_7d = now_site - EXIT_CODE_WINDOWS["7d"]
             for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
                 for site, buckets in site_data.items():
                     for wlabel, wsec in EXIT_CODE_WINDOWS.items():
@@ -1373,10 +1375,14 @@ class State:
                                 sw["total"] += cnt
                                 if code != "0":
                                     sw["failures"] += cnt
-                    # Per-code counts for 1h window + completion cross-ref
+                    # Per-code counts for 1h/7d windows + completion cross-ref
                     wf_site_done = 0
                     wf_site_fail = 0
                     for ts, codes in buckets.items():
+                        if ts >= cutoff_7d:
+                            sc7 = site_codes_7d.setdefault(site, {})
+                            for code, cnt in codes.items():
+                                sc7[code] = sc7.get(code, 0) + cnt
                         if ts < cutoff_1h:
                             continue
                         sc = site_codes_1h.setdefault(site, {})
@@ -1411,6 +1417,7 @@ class State:
             for site, wins in view_site_ec.items():
                 entry = dict(wins)
                 entry["codes"] = site_codes_1h.get(site, {})
+                entry["codes_7d"] = site_codes_7d.get(site, {})
                 # Per-site efficiency (aggregate across workflows)
                 site_eff = {}
                 for wlabel, wsec in EXIT_CODE_WINDOWS.items():

@@ -53,8 +53,8 @@
 </div>
 
 <div class="graphs-row">
-  <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="hourly"></div>
-  <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="daily"></div>
+  {# <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="hourly"></div> #}
+  {# <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="daily"></div> #}
   <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="weekly"></div>
   <div class="chart" data-src="/{{ view }}/json/_sites/{{ name|replace('/', '_') }}_histogram.json" data-chart-type="histogram"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/site_priorities/{{ name }}" data-chart-type="stacked" data-interval="weekly" data-stacked-metric="CpusInUse" data-stacked-label="CPUs by Priority"></div>
@@ -93,20 +93,38 @@
   </table>
 
   {% if site_exit_codes.get('annotated') %}
-  <h3 style="margin:12px 0 6px;font-size:13px;color:var(--text-th)">Exit Codes (last hour)</h3>
-  <table class="data-table compact sortable" data-sort-default="2:desc">
+  <h3 style="margin:12px 0 6px;font-size:13px;color:var(--text-th)">Exit Codes</h3>
+  <table class="data-table compact sortable" data-sort-default="3:desc">
     <thead><tr>
       <th data-sort="num">Exit Code</th>
       <th>Description</th>
-      <th data-sort="num">Count</th>
+      <th data-sort="num">Count (1h)</th>
+      <th data-sort="num">Count (7d)</th>
     </tr></thead>
     <tbody>
+    {% set codes_7d_map = {} %}
+    {% for entry in site_ec_7d %}
+      {% if codes_7d_map.update({entry.code: entry.count}) %}{% endif %}
+    {% endfor %}
+    {% set seen = {} %}
     {% for entry in site_exit_codes.annotated %}
     {% if entry.code != '0' %}
+    {% if seen.update({entry.code: true}) %}{% endif %}
     <tr>
       <td><a href="/{{ view }}/exitcode/{{ entry.code }}">{{ entry.code }}</a></td>
       <td>{{ entry.desc }}</td>
       <td><a href="/{{ view }}/failed?site={{ name }}&code={{ entry.code }}">{{ entry.count|fmt }}</a></td>
+      <td>{{ codes_7d_map.get(entry.code, 0)|fmt }}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    {% for entry in site_ec_7d %}
+    {% if entry.code not in seen %}
+    <tr>
+      <td><a href="/{{ view }}/exitcode/{{ entry.code }}">{{ entry.code }}</a></td>
+      <td>{{ entry.desc }}</td>
+      <td>0</td>
+      <td>{{ entry.count|fmt }}</td>
     </tr>
     {% endif %}
     {% endfor %}

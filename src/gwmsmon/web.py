@@ -941,6 +941,21 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             resp = jsonify(combined)
             resp.headers["Cache-Control"] = "max-age=120, public"
             return resp
+        elif kind == "site_priorities" and len(parts) == 2:
+            # Per-site priority breakdown
+            site_name = parts[1]
+            ts_dir = os.path.join(basedir, "timeseries")
+            blocks = ["B0", "B1", "B2", "B3", "B4", "B5", "B6", "B7"]
+            combined = {}
+            for block in blocks:
+                fname = f"site_priority_{site_name}_{block}.json"
+                data = _load_json(ts_dir, fname)
+                if data.get("series"):
+                    combined[block] = data["series"]
+            from flask import jsonify
+            resp = jsonify(combined)
+            resp.headers["Cache-Control"] = "max-age=120, public"
+            return resp
         elif kind == "fairshare" and len(parts) == 1:
             # Combined endpoint: merge all fairshare timeseries
             ts_dir = os.path.join(basedir, "timeseries")

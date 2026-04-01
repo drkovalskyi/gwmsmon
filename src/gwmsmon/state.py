@@ -210,6 +210,7 @@ class State:
                 "sites": {},
                 "totals": _zero_counts(),
                 "priorities": {},
+                "site_priorities": {},
                 "schedds": {},
             },
             "analysisview": {
@@ -355,6 +356,21 @@ class State:
         for k, v in _zero_counts().items():
             p.setdefault(k, 0)
         _add_counts(p, status, cpus)
+        # Track unique-site idle per priority block
+        if status == 1 and desired:
+            unique_site = len([s for s in desired.split(",")
+                               if s.strip()]) == 1
+            if unique_site:
+                p.setdefault("UniqueIdle", 0)
+                p.setdefault("UniqueCpusPend", 0)
+                p["UniqueIdle"] += 1
+                p["UniqueCpusPend"] += cpus
+
+        # per-site priority (running only — for site detail priority chart)
+        if site and status == 2:
+            sp = _ensure(view["site_priorities"], site, prio)
+            sp.setdefault("CpusInUse", 0)
+            sp["CpusInUse"] += cpus
 
         # per-request priority tracking
         req_prio = _ensure(view["workflows"], request, "_priority")
@@ -1750,6 +1766,12 @@ class State:
             }, now)
         for block, counts in snap["prodview"]["priorities"].items():
             self._ts_append("prodview", f"priority:{block}", counts, now)
+        for site_name, blocks in snap["prodview"].get(
+                "site_priorities", {}).items():
+            for block, counts in blocks.items():
+                self._ts_append("prodview",
+                                f"site_priority:{site_name}:{block}",
+                                counts, now)
 
         # analysisview
         self._ts_append("analysisview", "_summary",

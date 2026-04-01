@@ -57,6 +57,7 @@
   <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="daily"></div>
   <div class="chart" data-src="/{{ view }}/tsdata/site/{{ name }}" data-interval="weekly"></div>
   <div class="chart" data-src="/{{ view }}/json/_sites/{{ name|replace('/', '_') }}_histogram.json" data-chart-type="histogram"></div>
+  <div class="chart" data-src="/{{ view }}/tsdata/site_priorities/{{ name }}" data-chart-type="stacked" data-interval="weekly" data-stacked-metric="CpusInUse" data-stacked-label="CPUs by Priority"></div>
 </div>
 
 {% set any_completions = site_completion.get('1h', {}).get('total', 0) > 0 or site_completion.get('24h', {}).get('total', 0) > 0 or site_completion.get('7d', {}).get('total', 0) > 0 %}

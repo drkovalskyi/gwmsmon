@@ -416,7 +416,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
 // --- uPlot chart rendering ---
 (function() {
-  var INTERVALS = { hourly: 3*3600, daily: 24*3600, weekly: 7*24*3600 };
+  var INTERVALS = { hourly: 3*3600, daily: 24*3600, weekly: 7*24*3600, monthly: 30*24*3600 };
   var isDark = document.documentElement.dataset.theme === 'dark';
   var CPUS_COLOR = isDark ? '#64b5f6' : '#0055D4';
   var RATIO_COLOR = isDark ? '#FF9830' : '#222222';
@@ -754,19 +754,19 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
     var label = document.createElement('div');
     label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:' + AXIS_LABEL_STROKE + ';padding:2px 0 0';
-    label.textContent = {hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days'}[el.dataset.interval] || el.dataset.interval;
+    label.textContent = {hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days', monthly:'1 Month'}[el.dataset.interval] || el.dataset.interval;
     el.appendChild(label);
 
     // Detect series keys (first 3 non-timestamp keys)
     var seriesKeys = Object.keys(series).slice(0, 3);
-    if (!seriesKeys.length) return;
+    if (!seriesKeys.length) { el.style.display = 'none'; return; }
 
     // Fixed x-range: right edge = now, left edge = now - interval
     var xMax = Math.floor(Date.now() / 1000);
     var xMin = xMax - interval;
 
     var aligned = buildAligned(series, seriesKeys, xMin);
-    if (!aligned) return;
+    if (!aligned) { el.style.display = 'none'; return; }
     if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
     else if (interval >= 24*3600) aligned = downsampleAligned(aligned, 1800);
     extendToEdges(aligned, xMin, xMax);
@@ -850,7 +850,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var series = {};
     series[metric] = srcPts;
     var aligned = buildAligned(series, [metric], xMin);
-    if (!aligned) return;
+    if (!aligned) { el.style.display = 'none'; return; }
     extendToEdges(aligned, xMin, xMax);
 
     var timestamps = aligned.data[0];
@@ -919,7 +919,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var ts = data.timestamps;
     var success = data.success;
     var failure = data.failure;
-    if (!ts || !ts.length) return;
+    if (!ts || !ts.length) { el.style.display = 'none'; return; }
 
     // Aggregate 10-min buckets into 1-hour buckets
     var hourBucket = 3600;
@@ -1006,7 +1006,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
     var titleEl = document.createElement('div');
     titleEl.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:' + AXIS_LABEL_STROKE + ';padding:2px 0 0';
-    titleEl.textContent = label + ' \u2014 ' + ({hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days'}[el.dataset.interval] || '');
+    titleEl.textContent = label + ' \u2014 ' + ({hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days', monthly:'1 Month'}[el.dataset.interval] || '');
     el.appendChild(titleEl);
 
     var xMax = Math.floor(Date.now() / 1000);
@@ -1022,7 +1022,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       }
     });
     var timestamps = Object.keys(tSet).map(Number).sort(function(a,b){return a-b;});
-    if (!timestamps.length) return;
+    if (!timestamps.length) { el.style.display = 'none'; return; }
     // Extend right edge only — don't pad left to avoid 0-start
     if (timestamps[timestamps.length - 1] < xMax) timestamps.push(xMax);
 
@@ -1170,7 +1170,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var allKeys = cpusKeys.concat(pctKeys);
 
     var aligned = buildAligned(series, allKeys, xMin);
-    if (!aligned) return;
+    if (!aligned) { el.style.display = 'none'; return; }
     aligned = downsampleAligned(aligned, 3600);
     extendToEdges(aligned, xMin, xMax);
 
@@ -1352,10 +1352,10 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       }
     });
     var keys = FAIRSHARE_CATS.filter(function(c) { return series[c]; });
-    if (!keys.length) return;
+    if (!keys.length) { el.style.display = 'none'; return; }
 
     var aligned = buildAligned(series, keys, xMin);
-    if (!aligned) return;
+    if (!aligned) { el.style.display = 'none'; return; }
     aligned = downsampleAligned(aligned, 3600);
     extendToEdges(aligned, xMin, xMax);
 
@@ -1638,6 +1638,10 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
                 }
               });
             });
+            // Hide charts that got no data
+            charts.forEach(function(el) {
+              if (el.querySelector('.chart-loading')) el.style.display = 'none';
+            });
           }
         });
     });
@@ -1651,7 +1655,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
     var label = document.createElement('div');
     label.style.cssText = 'text-align:center;font-size:11px;font-weight:600;color:' + AXIS_LABEL_STROKE + ';padding:2px 0 0';
-    label.textContent = {hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days'}[el.dataset.interval] || el.dataset.interval;
+    label.textContent = {hourly:'3 Hours', daily:'24 Hours', weekly:'7 Days', monthly:'1 Month'}[el.dataset.interval] || el.dataset.interval;
     el.appendChild(label);
 
     // Fixed x-range: right edge = now, left edge = now - interval
@@ -1671,15 +1675,15 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
       var keys = [panel.cpusKey, panel.jobsKey];
       var aligned = buildAligned(series, keys, xMin);
-      if (!aligned) return;
-      if (interval >= 7*86400) aligned = downsampleAligned(aligned, 3600);
-      else if (interval >= 24*3600) aligned = downsampleAligned(aligned, 1800);
+      if (!aligned) { el.style.display = 'none'; return; }
+      if (interval >= 24*3600 && interval < 7*86400) aligned = downsampleAligned(aligned, 1800);
       extendToEdges(aligned, xMin, xMax);
 
       var timestamps = aligned.data[0];
       var cpusArr = aligned.data[1];
       var jobsArr = aligned.data[2];
       var ratioArr = computeRatio(cpusArr, jobsArr);
+      if (interval >= 7*86400) ratioArr = emaSmooth(ratioArr, 0.15);
 
       var cpusYMax = sharedCpusYMax[panel.cpusKey];
 

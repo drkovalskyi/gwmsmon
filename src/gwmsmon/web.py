@@ -90,6 +90,8 @@ def _format_number(n):
     """Format a number with thousand separators."""
     if n is None:
         return "0"
+    if isinstance(n, str):
+        return n
     if isinstance(n, float):
         return "{:,.1f}".format(n)
     return "{:,}".format(n)
@@ -438,11 +440,16 @@ def create_app(config_path="/etc/gwmsmon.conf"):
 
         totals_data = _load_json(basedir, "totals.json")
         workflows = totals_data.get("workflows", {})
-        if name not in workflows:
-            abort(404)
-
-        subtasks = workflows[name]
         req_dir = _safe_path(basedir, name.replace("/", os.sep))
+
+        if name in workflows:
+            subtasks = workflows[name]
+        else:
+            # Inactive workflow — load from detail.json if it exists
+            detail_check = _load_json(req_dir, "detail.json")
+            if not detail_check:
+                abort(404)
+            subtasks = detail_check.get("subtasks", {})
         exit_codes = _annotate_exit_codes(
             _load_json(req_dir, "exit_codes.json"))
         site_exit_codes = exit_codes.get("sites", {}) if exit_codes else {}

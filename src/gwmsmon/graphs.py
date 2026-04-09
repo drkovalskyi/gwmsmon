@@ -101,7 +101,12 @@ def render_graph(basedir, spec):
         if len(title) > 60:
             title = title[:57] + "..."
     else:
-        return None
+        # Bare workflow name: treat as request
+        entity_name = "/".join(parts[:-1])
+        entity = "request:{}".format(entity_name)
+        title = "{} ({})".format(entity_name, interval_name)
+        if len(title) > 60:
+            title = title[:57] + "..."
 
     # Resolve timeseries file path
     safe_name = entity.replace("/", "_").replace(":", "_")
@@ -142,21 +147,21 @@ def render_graph(basedir, spec):
     return png
 
 
+def _ema(values, alpha=0.15):
+    """Exponential moving average for smoothing."""
+    out = []
+    prev = None
+    for v in values:
+        if prev is None:
+            prev = v
+        else:
+            prev = alpha * v + (1 - alpha) * prev
+        out.append(prev)
+    return out
+
+
 def _render_timeseries(series, interval, title):
-    """Render a two-panel time-series graph as PNG bytes.
-
-    Top panel: Running — CpusInUse (left) + cores/job (right)
-    Bottom panel: Pending — CpusPending (left) + cores/job (right)
-
-    Design rules:
-    - Zero is always visible on both y-axes. Suppressing zero distorts
-      perception of magnitude and hides whether values are large or small.
-    - The cores/job right y-axis uses a single shared scale across both
-      panels AND across all interval plots on the same page.  To achieve
-      this the max is computed from ALL data in the file (not filtered
-      by interval), so every render of the same entity gets the same limit.
-    - Values at max/min never touch the frame (YLIM_PAD headroom).
-    """
+    """Render a two-panel time-series graph as PNG bytes."""
     now = time.time()
     cutoff = now - interval
 
@@ -183,7 +188,8 @@ def _render_timeseries(series, interval, title):
         sharex=True,
     )
 
-    fig.suptitle(title, fontsize=9, y=0.99)
+    # Determine if smoothing is needed (monthly or longer)
+    smooth = interval >= 7 * 86400
 
     has_data = False
     axes = [ax_top, ax_bot]
@@ -204,8 +210,15 @@ def _render_timeseries(series, interval, title):
             has_data = True
             times = [datetime.fromtimestamp(t) for t, _ in cpus_filtered]
             values = [v for _, v in cpus_filtered]
-            ax.plot(times, values, color=CPUS_COLOR, label=cpus_key,
-                    linewidth=1.5)
+            if smooth:
+                # Faint raw line + bold EMA
+                ax.plot(times, values, color=CPUS_COLOR, linewidth=0.5,
+                        alpha=0.3)
+                ax.plot(times, _ema(values), color=CPUS_COLOR,
+                        label=cpus_key, linewidth=1.5)
+            else:
+                ax.plot(times, values, color=CPUS_COLOR, label=cpus_key,
+                        linewidth=1.5)
 
             # Compute cores/job where we have both series at same timestamp
             ratio_times = []
@@ -218,7 +231,8 @@ def _render_timeseries(series, interval, title):
 
             if ratio_times:
                 ax2 = ax.twinx()
-                ax2.plot(ratio_times, ratio_values, color=RATIO_COLOR,
+                plot_ratio = _ema(ratio_values) if smooth else ratio_values
+                ax2.plot(ratio_times, plot_ratio, color=RATIO_COLOR,
                          label="cores/job", linewidth=1.2,
                          linestyle="--")
                 ax2.set_ylim(0, ratio_ymax)

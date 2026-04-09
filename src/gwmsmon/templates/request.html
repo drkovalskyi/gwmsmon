@@ -25,7 +25,7 @@
   </div>
   {% if prio_info %}
   <div class="stat">
-    <div class="stat-value">{{ prio_info.get('block', '?') }}</div>
+    <div class="stat-value">{{ prio_info.get('block', '') }}</div>
     <div class="stat-label">Priority Block</div>
   </div>
   <div class="stat">
@@ -77,12 +77,15 @@
 </details>
 {% endif %}
 
+{# Only show charts if there's recent timeseries data #}
+{% if req_totals.get('Running', 0) or req_totals.get('MatchingIdle', 0) or (exit_codes and exit_codes.get('total', 0)) %}
 <div class="graphs-row">
-  <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="hourly"></div>
+  {# <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="hourly"></div> #}
   <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="daily"></div>
-  <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="weekly"></div>
+  <div class="chart" data-src="/{{ view }}/tsdata/request/{{ name }}" data-interval="monthly"></div>
   <div class="chart" data-src="/{{ view }}/json/{{ name }}/completion_histogram.json" data-chart-type="histogram"></div>
 </div>
+{% endif %}
 
 {% if prio_info and prio_info.get('blocks', {})|length > 1 %}
 <div class="section">
@@ -250,7 +253,7 @@
     <tr>
       {% set short_st = st_name.replace('/' + name + '/', '') if ('/' + name + '/') in st_name else st_name %}
       <td title="{{ st_name }}"><a href="/{{ view }}/request/{{ name }}/subtask/{{ short_st }}">{{ short_st }}</a></td>
-      <td>{{ st_data.get('_prio', '')|fmt }}</td>
+      <td>{{ st_data.get('_prio', '') or ''|fmt }}</td>
       <td>{{ st_data.get('Running', 0)|fmt }}</td>
       <td>{{ st_data.get('MatchingIdle', 0)|fmt }}</td>
       <td>{{ st_data.get('CpusInUse', 0)|fmt }}</td>

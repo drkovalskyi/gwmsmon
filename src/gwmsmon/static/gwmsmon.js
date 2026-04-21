@@ -416,6 +416,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
 // --- uPlot chart rendering ---
 (function() {
+  // Disable point markers globally for all series
+  if (window.uPlot) uPlot.defaults = { points: { show: false } };
   var INTERVALS = { hourly: 3*3600, daily: 24*3600, weekly: 7*24*3600, monthly: 30*24*3600 };
   var isDark = document.documentElement.dataset.theme === 'dark';
   var CPUS_COLOR = isDark ? '#64b5f6' : '#0055D4';
@@ -782,6 +784,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         stroke: SIMPLE_COLORS[k] || [RUNNING_COLOR, IDLE_COLOR, HELD_COLOR][i],
         width: 2,
         label: k,
+        points: { show: false },
       });
       dataArrays.push(aligned.data[i + 1]);
     });
@@ -895,6 +898,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
           stroke: CPUS_COLOR,
           width: 2,
           label: metric,
+          points: { show: false },
         },
       ],
     };
@@ -982,9 +986,9 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         // Raw failure — faint
         { scale: 'y', stroke: (isDark ? '#CC6000' : '#B04000') + '30', width: 1, label: 'Failure (raw)', points: {show: false} },
         // EMA success — bold with fill
-        { scale: 'y', stroke: isDark ? '#2050A0' : '#1A4FA0', fill: SUCCESS_COLOR + '30', width: 2, label: 'Success' },
+        { scale: 'y', stroke: isDark ? '#2050A0' : '#1A4FA0', fill: SUCCESS_COLOR + '30', width: 2, label: 'Success', points: {show:false} },
         // EMA failure — bold with fill
-        { scale: 'y', stroke: isDark ? '#CC6000' : '#B04000', fill: FAILURE_COLOR + '30', width: 2, label: 'Failure' },
+        { scale: 'y', stroke: isDark ? '#CC6000' : '#B04000', fill: FAILURE_COLOR + '30', width: 2, label: 'Failure', points: {show:false} },
       ],
     };
 
@@ -993,11 +997,21 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
   // Priority block colors — exact old service palette
   // Visual order bottom→top: B0(red), B1(orange), ..., B7(black)
+  // Warm→cool palette, colorblind-safe (no green): B0=red → B7=grey
   var BLOCK_COLORS = [
-    '#ff0000', '#ff7f00', '#ffff00', '#00ff00',
-    '#0000ff', '#6600ff', '#8800ff', isDark ? '#90A4AE' : '#000000'
+    '#d32f2f', '#e64a19', '#ef8c08', '#f9c80e',
+    '#1565c0', '#0e9480', '#5e35b1', '#78909c'
+  ];
+  // 50% white-blended fills
+  var BLOCK_FILLS = [
+    '#e99797', '#f2a48c', '#f7c583', '#fce386',
+    '#8ab2df', '#86c9bf', '#ae9ad8', '#bbc7cd'
   ];
   var BLOCKS = ['B0','B1','B2','B3','B4','B5','B6','B7'];
+  var BLOCK_LABELS = {
+    B0:'\u2265130K', B1:'110\u2013130K', B2:'90\u2013110K', B3:'85\u201390K',
+    B4:'80\u201385K', B5:'70\u201380K', B6:'63\u201370K', B7:'<63K'
+  };
 
   function renderStackedChart(el, blockData, metric, label) {
     var interval = INTERVALS[el.dataset.interval] || INTERVALS.hourly;
@@ -1041,43 +1055,44 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       return arr;
     });
 
-    // Cumulate from B0 upward: cum[0]=B0, cum[1]=B0+B1, ..., cum[7]=total
-    var cum = [];
-    for (var i = 0; i < BLOCKS.length; i++) {
-      var prev = i > 0 ? cum[i - 1] : null;
-      var arr = new Float64Array(timestamps.length);
-      for (var j = 0; j < timestamps.length; j++) {
-        arr[j] = blockArrays[i][j] + (prev ? prev[j] : 0);
-      }
-      cum.push(arr);
-    }
-
-    // uPlot data: series 1 = outermost (total), series 8 = innermost (B0)
-    // data[1]=cum[7](total), data[2]=cum[6], ..., data[8]=cum[0](B0)
+    var n = timestamps.length;
     var tsArr = new Float64Array(timestamps);
-    var data = [tsArr];
-    for (var i = BLOCKS.length - 1; i >= 0; i--) {
-      data.push(cum[i]);
+
+    // Build cumulative stack for visible blocks
+    function buildBlockStack(visibleSet) {
+      var cum = [];
+      for (var i = 0; i < BLOCKS.length; i++) {
+        var prev = i > 0 ? cum[i - 1] : null;
+        var arr = new Float64Array(n);
+        var show = visibleSet ? visibleSet.has(BLOCKS[i]) : true;
+        for (var j = 0; j < n; j++) {
+          arr[j] = (show ? blockArrays[i][j] : 0) + (prev ? prev[j] : 0);
+        }
+        cum.push(arr);
+      }
+      // uPlot data: series 1=outermost (total), series 8=innermost (B0)
+      var d = [tsArr];
+      for (var i = BLOCKS.length - 1; i >= 0; i--) d.push(cum[i]);
+      return { data: d, yMax: alignedCpusMax(arrMax(cum[BLOCKS.length - 1])) };
     }
 
-    var yMax = alignedCpusMax(arrMax(cum[BLOCKS.length - 1]));
+    var initial = buildBlockStack(null);
 
-    // Series drawn outermost first (data[1]=total) to innermost (data[8]=B0).
-    // Each fills to zero; later series paint over earlier ones, creating stack.
-    // data[si] contribution = block BLOCKS.length - si
     var uSeries = [{}];
     for (var si = 1; si <= BLOCKS.length; si++) {
       var bi = BLOCKS.length - si;
       uSeries.push({
         scale: 'y',
         stroke: BLOCK_COLORS[bi],
-        fill: BLOCK_COLORS[bi],
-        width: 0,
-        label: BLOCKS[bi],
+        fill: BLOCK_FILLS[bi],
+        width: 1.5,
+        label: BLOCK_LABELS[BLOCKS[bi]] || BLOCKS[bi],
+        _color: BLOCK_COLORS[bi],
+        points: { show: false },
       });
     }
 
-    // Tooltip: show per-block raw values (not cumulative)
+    // Tooltip: show per-block raw values
     function stackedTooltipPlugin() {
       var tip;
       return {
@@ -1094,11 +1109,10 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
             var d = new Date(ts * 1000);
             var time = ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
             var html = '<b>' + d.toLocaleDateString() + ' ' + time + '</b>';
-            // Iterate blocks bottom→top (B0 first)
             for (var bi = 0; bi < BLOCKS.length; bi++) {
               var val = blockArrays[bi][idx];
               if (val > 0) {
-                html += '<br><span style="color:' + BLOCK_COLORS[bi] + '">\u25CF</span> ' + BLOCKS[bi] + ': ' + fmtCount(val);
+                html += '<br><span style="color:' + BLOCK_COLORS[bi] + '">\u25CF</span> ' + (BLOCK_LABELS[BLOCKS[bi]] || BLOCKS[bi]) + ': ' + fmtCount(val);
               }
             }
             tip.innerHTML = html;
@@ -1122,7 +1136,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       plugins: [stackedTooltipPlugin()],
       scales: {
         x: { min: xMin, max: xMax },
-        y: { min: 0, max: yMax, auto: false },
+        y: { min: 0, max: initial.yMax, auto: false },
       },
       axes: [
         { size: XAXIS_H, font: '10px sans-serif', values: xFmt, stroke: AXIS_STROKE },
@@ -1139,7 +1153,48 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       series: uSeries,
     };
 
-    new uPlot(opts, data, el);
+    var chartWrap = document.createElement('div');
+    el.appendChild(chartWrap);
+    var chart = new uPlot(opts, initial.data, chartWrap);
+
+    function rebuildChart(rebuilt) {
+      chart.destroy();
+      opts.scales.y.max = rebuilt.yMax;
+      chart = new uPlot(opts, rebuilt.data, chartWrap);
+    }
+
+    // Click-to-isolate legend
+    var legendDiv = document.createElement('div');
+    legendDiv.style.cssText = 'display:flex;gap:8px;justify-content:center;padding:4px 0;font-size:11px;cursor:pointer;flex-wrap:wrap';
+    var soloMode = null;
+
+    BLOCKS.forEach(function(block, bi) {
+      // Skip blocks with no data
+      var hasData = false;
+      for (var j = 0; j < n; j++) { if (blockArrays[bi][j] > 0) { hasData = true; break; } }
+      if (!hasData) return;
+
+      var item = document.createElement('span');
+      item.innerHTML = '<span style="color:' + BLOCK_COLORS[bi] + '">\u25CF</span> ' + (BLOCK_LABELS[block] || block);
+      item.dataset.block = block;
+      item.addEventListener('click', function() {
+        if (soloMode === block) {
+          soloMode = null;
+          rebuildChart(buildBlockStack(null));
+          legendDiv.querySelectorAll('span[data-block]').forEach(function(s) { s.style.opacity = '1'; });
+        } else {
+          soloMode = block;
+          rebuildChart(buildBlockStack(new Set([block])));
+          legendDiv.querySelectorAll('span[data-block]').forEach(function(s) {
+            s.style.opacity = s.dataset.block === block ? '1' : '0.3';
+          });
+        }
+      });
+      legendDiv.appendChild(item);
+    });
+    el.style.height = 'auto';
+    el.style.overflow = 'visible';
+    el.appendChild(legendDiv);
   }
 
   // Exponential moving average: smooths noisy series
@@ -1294,13 +1349,13 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       ],
       series: [
         {},
-        { scale: 'cpus', stroke: TIER0_COLOR, fill: '#FDB280', width: 1.5, label: 'Tier0', _color: TIER0_COLOR },
-        { scale: 'cpus', stroke: PROD_COLOR, fill: '#ABCAF9', width: 1.5, label: 'Production', _color: PROD_COLOR },
-        { scale: 'cpus', stroke: ANA_COLOR, fill: '#F0DA81', width: 1.5, label: 'Analysis', _color: ANA_COLOR },
-        { scale: 'cpus', stroke: OTHER_COLOR, fill: '#ABD3A5', width: 1.5, label: 'Other', _color: OTHER_COLOR },
-        { scale: 'pct', stroke: FAIL_COLOR, width: 1.5, label: 'Failure %', _color: FAIL_COLOR },
-        { scale: 'pct', stroke: CPUEFF_COLOR, width: 1.5, label: 'CPU Eff %', _color: CPUEFF_COLOR },
-        { scale: 'pct', stroke: PROCEFF_COLOR, width: 1.5, label: 'Proc Eff %', _color: PROCEFF_COLOR },
+        { scale: 'cpus', stroke: TIER0_COLOR, fill: '#FDB280', width: 1.5, label: 'Tier0', _color: TIER0_COLOR, points: {show:false} },
+        { scale: 'cpus', stroke: PROD_COLOR, fill: '#ABCAF9', width: 1.5, label: 'Production', _color: PROD_COLOR, points: {show:false} },
+        { scale: 'cpus', stroke: ANA_COLOR, fill: '#F0DA81', width: 1.5, label: 'Analysis', _color: ANA_COLOR, points: {show:false} },
+        { scale: 'cpus', stroke: OTHER_COLOR, fill: '#ABD3A5', width: 1.5, label: 'Other', _color: OTHER_COLOR, points: {show:false} },
+        { scale: 'pct', stroke: FAIL_COLOR, width: 1.5, label: 'Failure %', _color: FAIL_COLOR, points: {show:false} },
+        { scale: 'pct', stroke: CPUEFF_COLOR, width: 1.5, label: 'CPU Eff %', _color: CPUEFF_COLOR, points: {show:false} },
+        { scale: 'pct', stroke: PROCEFF_COLOR, width: 1.5, label: 'Proc Eff %', _color: PROCEFF_COLOR, points: {show:false} },
       ],
     };
 
@@ -1403,6 +1458,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         label: FAIRSHARE_LABELS[cat] || cat,
         _color: color,
         _cat: cat,
+        points: { show: false },
       });
     });
 
@@ -1735,6 +1791,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
             stroke: CPUS_COLOR,
             width: 2,
             label: panel.cpusKey,
+            points: { show: false },
           },
           {
             scale: 'ratio',
@@ -1742,6 +1799,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
             width: 1.5,
             dash: [6, 3],
             label: 'cores/job',
+            points: { show: false },
           },
         ],
       };

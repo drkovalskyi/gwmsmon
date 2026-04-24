@@ -301,9 +301,16 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         priorities = summary.get("priorities", {}) if view == "prodview" else {}
 
         fairshare = {}
+        fairshare_totals = {"Running": 0, "CpusInUse": 0}
         if view == "globalview":
             fairshare = _load_json(basedir, "fairshare.json").get(
                 "categories", {})
+            fairshare_totals = {
+                "Running": sum(d.get("Running", 0)
+                               for d in fairshare.values()),
+                "CpusInUse": sum(d.get("CpusInUse", 0)
+                                 for d in fairshare.values()),
+            }
 
         return render_template(
             "overview.html",
@@ -319,6 +326,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             schedds=summary.get("schedds", {}),
             priorities=priorities,
             fairshare=fairshare,
+            fairshare_totals=fairshare_totals,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,
@@ -1068,12 +1076,6 @@ def _poolview_overview(cfg):
         key=lambda x: -x[1].get("Running", 0),
     )
 
-    fairshare = summary.get("fairshare", {})
-    sorted_fairshare = sorted(
-        fairshare.items(),
-        key=lambda x: -x[1].get("CpusInUse", 0),
-    )
-
     return render_template(
         "poolview.html",
         view="poolview",
@@ -1081,7 +1083,6 @@ def _poolview_overview(cfg):
         totals=summary.get("totals", {}),
         schedds=sorted_schedds,
         user_summary=sorted_users,
-        fairshare=sorted_fairshare,
         updated=updated,
         freshness=_freshness(updated),
         updated_ts=updated,

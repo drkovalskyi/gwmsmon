@@ -99,24 +99,32 @@ HISTORY_PROJECTION = [
 ]
 
 
-def get_schedds(pool):
-    """Query collector for schedd ads.
+def get_schedds(pool, extra_collectors=None):
+    """Query collector(s) for schedd ads.
 
     Returns a list of (schedd_ad, schedd_name, schedd_type, health) tuples.
     health is a dict with TotalRunningJobs, TotalIdleJobs, TotalHeldJobs,
     MaxJobsRunning from the schedd ad itself.
     """
-    collector = htcondor.Collector(pool)
-    ads = collector.query(
-        htcondor.AdTypes.Schedd,
-        projection=["Name", "MyAddress", "CMSGWMS_Type",
-                     "ScheddIpAddr", "Machine",
-                     "TotalRunningJobs", "TotalIdleJobs",
-                     "TotalHeldJobs", "MaxJobsRunning"],
-    )
+    projection = ["Name", "MyAddress", "CMSGWMS_Type",
+                   "ScheddIpAddr", "Machine",
+                   "TotalRunningJobs", "TotalIdleJobs",
+                   "TotalHeldJobs", "MaxJobsRunning"]
+    all_ads = {}
+    for coll_addr in [pool] + (extra_collectors or []):
+        try:
+            collector = htcondor.Collector(coll_addr)
+            ads = collector.query(htcondor.AdTypes.Schedd,
+                                  projection=projection)
+            for ad in ads:
+                name = classad_to_python(ad.get("Name", "unknown"))
+                if name not in all_ads:
+                    all_ads[name] = ad
+        except Exception:
+            log.warning("failed to query collector %s for schedds",
+                        coll_addr, exc_info=True)
     result = []
-    for ad in ads:
-        name = classad_to_python(ad.get("Name", "unknown"))
+    for name, ad in all_ads.items():
         stype = classad_to_python(ad.get("CMSGWMS_Type", "unknown"))
         health = {
             "TotalRunningJobs": classad_to_python(ad.get("TotalRunningJobs", 0)) or 0,
@@ -523,7 +531,9 @@ def query_all(cfg):
     t0 = time.time()
 
     # 4a: job-level queries
-    schedd_info = get_schedds(pool)
+    neg_hosts = cfg.get("htcondor", "negotiator_collectors", fallback="")
+    extra = [h.strip() for h in neg_hosts.split(",") if h.strip()]
+    schedd_info = get_schedds(pool, extra_collectors=extra)
     log.info("found %d schedds", len(schedd_info))
     jobs = query_schedds_parallel(schedd_info)
     log.info("collected %d jobs in %.1fs", len(jobs), time.time() - t0)

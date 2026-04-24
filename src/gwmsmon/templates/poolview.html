@@ -71,6 +71,8 @@
     <thead>
       <tr>
         <th>User</th>
+        <th>Tool</th>
+        <th>Schedd Types</th>
         <th data-sort="num">Running</th>
         <th data-sort="num">Idle</th>
         <th data-sort="num">Held</th>
@@ -81,7 +83,9 @@
     <tbody>
     {% for name, data in user_summary %}
     <tr>
-      <td>{{ name }}</td>
+      <td><a href="/globalview/request/{{ name }}">{{ name }}</a></td>
+      <td>{{ data.get('Tool', '') }}</td>
+      <td>{{ data.get('ScheddTypes', '') }}</td>
       <td>{{ data.get('Running', 0)|fmt }}</td>
       <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>
       <td>{{ data.get('Held', 0)|fmt }}</td>

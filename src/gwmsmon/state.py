@@ -51,6 +51,52 @@ _EOS_PREFIXES = [
 ]
 
 
+# --- Tool detection ---
+# Each entry: (detect_func, tool_name, task_extract_func)
+# detect_func(job) -> bool
+# task_extract_func(job) -> task_name or None
+
+def _detect_kraken(job):
+    """Detect MIT Kraken jobs by environment variable."""
+    env = job.get("Environment", "")
+    return "KRAKEN_EXE=" in env or "KRAKEN_CONDOR" in env
+
+
+def _kraken_task(job):
+    """Extract Kraken task from Iwd path.
+
+    Iwd looks like: /home/submit/paus/cms/data/nanoao/536/Dataset+Name
+    We want: nanoao/536/Dataset+Name
+    """
+    iwd = job.get("Iwd", "")
+    # Find the part after .../cms/data/ or .../cms/logs/
+    for marker in ("/cms/data/", "/cms/logs/"):
+        idx = iwd.find(marker)
+        if idx >= 0:
+            return iwd[idx + len(marker):]
+    # Fallback: last 3 path components
+    parts = iwd.rstrip("/").split("/")
+    if len(parts) >= 3:
+        return "/".join(parts[-3:])
+    return iwd
+
+
+_TOOL_DETECTORS = [
+    (_detect_kraken, "Kraken", _kraken_task),
+]
+
+
+def detect_tool(job):
+    """Detect which tool submitted a job.
+
+    Returns (tool_name, task_name) or (None, None).
+    """
+    for detect_fn, tool_name, task_fn in _TOOL_DETECTORS:
+        if detect_fn(job):
+            return tool_name, task_fn(job)
+    return None, None
+
+
 def eos_log_dir(request_name):
     """Return EOS base directory for a request's logs."""
     for prefix, subdir in _EOS_PREFIXES:
@@ -449,6 +495,9 @@ class State:
         site = job.get("MATCH_GLIDEIN_CMSSite")
         desired = job.get("DESIRED_Sites")
 
+        # Tool detection (custom submission frameworks)
+        tool_name, tool_task = detect_tool(job)
+
         # Task identifier fallback chain
         dagman_id = job.get("DAGManJobId")
         condora_req = job.get("CONDORA_RequestName")
@@ -456,12 +505,39 @@ class State:
                 or job.get("WMAgent_RequestName")
                 or condora_req
                 or (f"{schedd_name}#{dagman_id}" if dagman_id else None)
+                or tool_task
                 or job.get("SubmitFile")
                 or "unknown")
         # CONDORA subtask: append round to task name
         condora_round = job.get("CONDORA_Round")
         if condora_req and condora_round is not None:
             task = f"{task}/{condora_round}"
+
+        # Determine tool: CMS classads → standard frameworks → fallback
+        if not tool_name:
+            cms_tool = job.get("CMS_WMTool") or job.get("CMS_SubmissionTool")
+            if cms_tool and cms_tool not in ("User", "unknown"):
+                tool_name = str(cms_tool)
+            elif job.get("CRAB_ReqName"):
+                tool_name = "CRAB"
+            elif job.get("WMAgent_RequestName"):
+                tool_name = "WMAgent"
+            elif condora_req:
+                tool_name = "CONDORA"
+            # else: no tool detected — leave unlabeled
+
+        # Accumulate all tools per user
+        if tool_name:
+            user_tools = _ensure(view["users"], owner, "_tools")
+            user_tools.setdefault(tool_name, 0)
+            user_tools[tool_name] += 1
+
+        # Accumulate schedd types per user
+        stype = job.get("_schedd_type", "unknown")
+        if stype and stype != "unknown":
+            user_stypes = _ensure(view["users"], owner, "_schedd_types")
+            user_stypes.setdefault(stype, 0)
+            user_stypes[stype] += 1
 
         # users[owner][task]["Summary"]
         st = _ensure(view["users"], owner, task, "Summary")
@@ -2115,6 +2191,12 @@ class State:
                     "Running": 0, "MatchingIdle": 0, "Held": 0,
                     "CpusInUse": 0, "CpusPending": 0,
                 })
+                user_tools = tasks.get("_tools", {})
+                if user_tools:
+                    u["Tool"] = ", ".join(sorted(user_tools.keys()))
+                user_stypes = tasks.get("_schedd_types", {})
+                if user_stypes:
+                    u["ScheddTypes"] = ", ".join(sorted(user_stypes.keys()))
                 for task, task_data in tasks.items():
                     if task.startswith("_"):
                         continue

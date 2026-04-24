@@ -60,6 +60,10 @@ JOB_PROJECTION = [
     "OriginalMaxWallTimeMins",
     "OriginalMemory",
     "RequestDisk",
+    "Environment",
+    "Iwd",
+    "CMS_SubmissionTool",
+    "CMS_WMTool",
 ]
 
 # Projection for history queries (exit code collection, SPEC 4.5)

@@ -12,15 +12,18 @@ except ImportError:
     _HAS_CLASSAD = False
 
 
+_SCALAR_TYPES = (int, str, float, bool, type(None))
+
+
 def classad_to_python(value):
     """Recursively convert a classad value to a plain Python type.
 
-    - ExprTree: evaluate via .eval(), then convert the result
-    - Value.Undefined / Value.Error: None
-    - list: recursively convert elements
-    - int, float, bool, str, None: pass through
-    - everything else: str()
+    Hot path first: scalar (str/int/float/bool/None) — pass through.
+    Slow path: ExprTree / Value / list / dict / fallback.
     """
+    if isinstance(value, _SCALAR_TYPES):
+        return value
+
     if _HAS_CLASSAD:
         if isinstance(value, classad.ExprTree):
             try:
@@ -38,14 +41,15 @@ def classad_to_python(value):
     if isinstance(value, dict):
         return {k: classad_to_python(v) for k, v in value.items()}
 
-    if isinstance(value, (bool, int, float, str, type(None))):
-        return value
-
     return str(value)
 
 
 def convert_ad(ad, projection=None):
     """Convert a classad to a plain Python dict.
+
+    Fast path: most fields are scalars (already native Python). Skip
+    the recursive walker for those — only call classad_to_python for
+    ExprTree/list/dict.
 
     If projection is given, only include those keys.
     """
@@ -53,7 +57,11 @@ def convert_ad(ad, projection=None):
     keys = projection if projection else ad.keys()
     for key in keys:
         try:
-            result[key] = classad_to_python(ad[key])
+            v = ad[key]
         except KeyError:
-            pass
+            continue
+        if isinstance(v, _SCALAR_TYPES):
+            result[key] = v
+        else:
+            result[key] = classad_to_python(v)
     return result

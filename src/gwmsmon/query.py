@@ -12,12 +12,18 @@ All classad values are converted to plain Python at the boundary.
 
 import gc
 import logging
+import multiprocessing as mp
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    as_completed,
+)
 from urllib.request import urlopen
 from urllib.error import URLError
 from xml.etree import ElementTree
 
+import classad
 import htcondor
 
 from gwmsmon.convert import classad_to_python, convert_ad
@@ -33,7 +39,6 @@ JOB_PROJECTION = [
     "DESIRED_Sites",
     "MATCH_GLIDEIN_CMSSite",
     "Owner",
-    "EnteredCurrentStatus",
     "AccountingGroup",
     "AcctGroup",
     "WMAgent_RequestName",
@@ -41,17 +46,10 @@ JOB_PROJECTION = [
     "JobPrio",
     "CRAB_UserHN",
     "CRAB_ReqName",
-    "QDate",
-    "CRAB_UserWebDir",
     "CONDORA_RequestName",
     "CONDORA_Round",
     "DAGManJobId",
     "SubmitFile",
-    "DAG_NodesTotal",
-    "DAG_NodesDone",
-    "DAG_NodesFailed",
-    "DAG_NodesQueued",
-    "DAG_NodesReady",
     "CMS_JobType",
     "CMS_RequestType",
     "CMS_CampaignName",
@@ -144,7 +142,9 @@ def query_schedd(schedd_ad, projection=None):
     """Query a single schedd for all jobs. No constraint — fetch all
     jobs regardless of status. Each view filters in aggregation.
 
-    Returns a list of plain Python dicts.
+    Returns (jobs, t_query, t_convert) where t_query is the wall time
+    of schedd.query() and t_convert is the wall time of the
+    classad→dict conversion loop.
 
     Critical: classad objects pin C++ memory. Convert all ads to plain
     Python immediately and delete the raw result before returning.
@@ -152,59 +152,117 @@ def query_schedd(schedd_ad, projection=None):
     if projection is None:
         projection = JOB_PROJECTION
     schedd = htcondor.Schedd(schedd_ad)
+    t0 = time.perf_counter()
     raw = schedd.query(projection=projection)
+    t1 = time.perf_counter()
     jobs = []
     for ad in raw:
         jobs.append(convert_ad(ad, projection))
+    t2 = time.perf_counter()
     del raw
     gc.collect()
-    return jobs
+    return jobs, (t1 - t0), (t2 - t1)
 
 
-def query_schedds_parallel(schedd_info, projection=None, max_workers=12):
-    """Query all schedds in parallel for job classads.
+def _worker_query_schedd(name, my_address, stype, projection):
+    """Run in subprocess: build a synthetic schedd ad from name +
+    MyAddress, query it, convert all jobs to plain dicts, and return.
 
-    schedd_info: list of (schedd_ad, schedd_name, schedd_type) from
-                 get_schedds()
+    Subprocess sidesteps the GIL/binding-lock contention that limits
+    threaded parallelism to ~1.5× regardless of worker count.
+    """
+    ad = classad.ClassAd()
+    ad["MyAddress"] = my_address
+    ad["Name"] = name
+    schedd = htcondor.Schedd(ad)
+    t0 = time.perf_counter()
+    raw = schedd.query(projection=projection)
+    t1 = time.perf_counter()
+    jobs = []
+    for a in raw:
+        d = convert_ad(a, projection)
+        d["_schedd"] = name
+        d["_schedd_type"] = stype
+        jobs.append(d)
+    t2 = time.perf_counter()
+    del raw
+    gc.collect()
+    return jobs, (t1 - t0), (t2 - t1), name
+
+
+def query_schedds_parallel(schedd_info, projection=None, max_workers=8):
+    """Query all schedds in parallel processes for job classads.
+
+    schedd_info: list of (schedd_ad, schedd_name, schedd_type, health)
+                 from get_schedds()
 
     Returns a list of plain Python dicts, each tagged with _schedd
     (name) and _schedd_type.
 
-    Failed schedd queries are skipped with a warning — one bad schedd
-    never blocks the entire collection cycle.
+    Empty schedds (zero advertised jobs) are skipped — they can hang
+    for ~90s with no data to return. Failed queries are warned and
+    skipped; one bad schedd never blocks the cycle.
     """
     if projection is None:
         projection = JOB_PROJECTION
 
     all_jobs = []
     failed = []
+    per_schedd = []
+    n_skipped_empty = 0
+    t_phase_start = time.perf_counter()
 
-    def _query_one(ad, name, stype):
-        jobs = query_schedd(ad, projection)
-        for job in jobs:
-            job["_schedd"] = name
-            job["_schedd_type"] = stype
-        return jobs
-
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+    ctx = mp.get_context("fork")
+    with ProcessPoolExecutor(max_workers=max_workers,
+                             mp_context=ctx) as pool:
         futures = {}
-        for ad, name, stype, _health in schedd_info:
-            f = pool.submit(_query_one, ad, name, stype)
+        for ad, name, stype, health in schedd_info:
+            total = (health.get("TotalRunningJobs", 0)
+                     + health.get("TotalIdleJobs", 0)
+                     + health.get("TotalHeldJobs", 0))
+            if total == 0:
+                n_skipped_empty += 1
+                continue
+            my_addr = classad_to_python(ad.get("MyAddress", ""))
+            if not my_addr:
+                log.warning("schedd %s has no MyAddress, skipping", name)
+                failed.append(name)
+                continue
+            f = pool.submit(_worker_query_schedd,
+                            name, my_addr, stype, projection)
             futures[f] = name
 
         for f in as_completed(futures):
             name = futures[f]
             try:
-                result = f.result()
-                all_jobs.extend(result)
-                del result
+                jobs, t_q, t_c, _name = f.result()
+                all_jobs.extend(jobs)
+                per_schedd.append((name, t_q, t_c, len(jobs)))
+                del jobs
             except Exception:
                 log.warning("failed to query schedd %s, skipping", name,
                             exc_info=True)
                 failed.append(name)
 
-    # Force GC to release any lingering classad C++ memory
     gc.collect()
+
+    t_phase = time.perf_counter() - t_phase_start
+    t_query_sum = sum(p[1] for p in per_schedd)
+    t_convert_sum = sum(p[2] for p in per_schedd)
+    log.info(
+        "schedd phase: %d schedds (%d empty skipped), %d jobs, "
+        "wall=%.1fs, sum_query=%.1fs, sum_convert=%.1fs, procs=%d",
+        len(per_schedd), n_skipped_empty, len(all_jobs), t_phase,
+        t_query_sum, t_convert_sum, max_workers,
+    )
+
+    top = sorted(per_schedd,
+                 key=lambda p: -(p[1] + p[2]))[:10]
+    for name, t_q, t_c, n in top:
+        log.info(
+            "  slow schedd %s: query=%.1fs convert=%.1fs jobs=%d",
+            name, t_q, t_c, n,
+        )
 
     if failed:
         log.warning("skipped %d failed schedds: %s", len(failed),
@@ -238,7 +296,7 @@ def query_schedd_history(schedd_ad, since_time, projection=None):
 
 
 def query_history_parallel(schedd_info, watermarks, default_since=300,
-                           projection=None, max_workers=12):
+                           projection=None, max_workers=24):
     """Query all schedds history in parallel for recently completed jobs.
 
     schedd_info: list of (schedd_ad, schedd_name, schedd_type)

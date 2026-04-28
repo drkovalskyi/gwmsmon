@@ -54,7 +54,7 @@ def convert_ad(ad, projection=None):
     If projection is given, only include those keys.
     """
     result = {}
-    keys = projection if projection else ad.keys()
+    keys = projection if projection is not None else ad.keys()
     for key in keys:
         try:
             v = ad[key]

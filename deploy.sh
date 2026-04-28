@@ -121,11 +121,19 @@ VERIFY
 # --- 7. Health check web ---
 echo "==> Health check"
 sleep 2
-http_code=$(ssh "$HOST" "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/prodview/")
-if [ "$http_code" = "200" ]; then
-  echo "  Web OK (HTTP $http_code)"
-else
-  echo "  WARNING: web returned HTTP $http_code"
+fail=0
+for path in /prodview/ /analysisview/ /globalview/ /poolview/ /factoryview/ /status; do
+  http_code=$(ssh "$HOST" "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5000$path")
+  if [ "$http_code" = "200" ]; then
+    echo "  $path OK"
+  else
+    echo "  WARNING: $path returned HTTP $http_code"
+    fail=1
+  fi
+done
+if [ "$fail" = 1 ]; then
+  echo "==> Deploy completed with health-check warnings"
+  exit 1
 fi
 
 echo "==> Deploy complete"

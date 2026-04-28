@@ -13,9 +13,33 @@ dependencies = [
     "matplotlib",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "ruff",
+]
+
 [project.scripts]
 gwmsmon-collect = "gwmsmon.collector:main"
 gwmsmon-web = "gwmsmon.web:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # line length handled by formatter
+    "B008",  # function call in default arg (flask uses this)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

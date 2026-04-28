@@ -116,6 +116,8 @@ def main():
 
         except Exception:
             log.error("cycle %d failed", cycle, exc_info=True)
+            if args.once:
+                sys.exit(1)
 
         elapsed = time.time() - t0
         rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024

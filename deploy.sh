@@ -90,14 +90,27 @@ if [ "\$RELOAD" = true ]; then
 fi
 INSTALL
 
-# --- 5. Start services ---
+# --- 5. Canary cycle ---
+# Run a single collection cycle against the real pool with the new
+# code BEFORE letting systemd start the long-running collector. If
+# this exits non-zero, the new code crashed in the data pipeline and
+# we abort the deploy with services still stopped — easier to roll
+# back than fix a crashloop.
+echo "==> Canary cycle (one collection round, takes ~1 min)"
+if ! ssh "$HOST" "/usr/bin/python3 -m gwmsmon.collector --config /etc/gwmsmon.conf --once 2>&1 | tail -40"; then
+  echo "==> Canary FAILED — services left stopped, fix and re-run"
+  exit 1
+fi
+echo "  Canary OK"
+
+# --- 6. Start services ---
 echo "==> Starting services"
 ssh "$HOST" bash <<'START'
 sudo systemctl start gwmsmon-collect
 sudo systemctl start gwmsmon-web
 START
 
-# --- 6. Verify ---
+# --- 7. Verify ---
 echo "==> Verifying services"
 ssh "$HOST" bash <<'VERIFY'
 ok=true
@@ -118,7 +131,7 @@ fi
 [ "$ok" = true ] || exit 1
 VERIFY
 
-# --- 7. Health check web ---
+# --- 8. Health check web ---
 echo "==> Health check"
 sleep 2
 fail=0

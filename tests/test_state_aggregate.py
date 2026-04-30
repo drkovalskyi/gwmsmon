@@ -132,6 +132,65 @@ def test_held_jobs_excluded_from_prodview_running():
                 assert summary.get("Running", 0) == 0
 
 
+def test_non_vanilla_universe_jobs_excluded():
+    """Scheduler-universe (7) and local-universe (12) jobs run on the
+    AP itself (DAGMan, local helpers) and must not be counted as grid
+    workload. Only JobUniverse==5 (Vanilla) is real grid load."""
+    jobs = [
+        # Real grid job
+        _job(WMAgent_RequestName="prod-wf-1", JobStatus=2, JobUniverse=5),
+        # DAGMan helper — must be skipped from globalview/prodview/etc.
+        _job(JobStatus=2, JobUniverse=7, Owner="crabtw"),
+        # Local-universe — must be skipped
+        _job(JobStatus=2, JobUniverse=12, Owner="crabtw"),
+    ]
+    s = State()
+    s.update(jobs, summary_ads={}, factory_data={})
+
+    # crabtw should NOT appear at all (its only jobs were universe 7/12)
+    users = s.snapshot["globalview"]["users"]
+    assert "crabtw" not in users, \
+        f"crabtw aggregated despite all its jobs being non-vanilla: {users.get('crabtw')}"
+    # The real prod workflow IS aggregated
+    assert "prod-wf-1" in s.snapshot["prodview"]["workflows"]
+
+
+def test_poolview_schedds_universe_breakdown():
+    """Per-universe (vanilla/scheduler/local/other) Running/Idle/Held
+    counts are stamped onto poolview.schedds for each schedd, so the
+    Schedds table can show grid load and AP-side load separately."""
+    jobs = [
+        # 2 vanilla running, 1 vanilla idle, 1 vanilla held on schedd A
+        _job(_schedd="schedA", JobUniverse=5, JobStatus=2),
+        _job(_schedd="schedA", JobUniverse=5, JobStatus=2),
+        _job(_schedd="schedA", JobUniverse=5, JobStatus=1),
+        _job(_schedd="schedA", JobUniverse=5, JobStatus=5),
+        # Sched-universe: 1 running + 3 idle on schedA (DAGMans)
+        _job(_schedd="schedA", JobUniverse=7, JobStatus=2),
+        _job(_schedd="schedA", JobUniverse=7, JobStatus=1),
+        _job(_schedd="schedA", JobUniverse=7, JobStatus=1),
+        _job(_schedd="schedA", JobUniverse=7, JobStatus=1),
+        # Local-universe: 2 running on schedA
+        _job(_schedd="schedA", JobUniverse=12, JobStatus=2),
+        _job(_schedd="schedA", JobUniverse=12, JobStatus=2),
+        # Grid-universe (9) → bucketed as "other"
+        _job(_schedd="schedA", JobUniverse=9, JobStatus=2),
+    ]
+    s = State()
+    s.update(jobs, summary_ads={}, factory_data={})
+    sd = s.snapshot["poolview"]["schedds"]["schedA"]
+    assert sd["vanillaRunning"] == 2
+    assert sd["vanillaIdle"] == 1
+    assert sd["vanillaHeld"] == 1
+    assert sd["schedulerRunning"] == 1
+    assert sd["schedulerIdle"] == 3
+    assert sd["schedulerHeld"] == 0
+    assert sd["localRunning"] == 2
+    assert sd["localIdle"] == 0
+    assert sd["otherRunning"] == 1
+    assert sd["otherIdle"] == 0
+
+
 def test_tool_detection_kraken():
     """Kraken jobs are identified by KRAKEN_EXE in Environment."""
     job = _job(

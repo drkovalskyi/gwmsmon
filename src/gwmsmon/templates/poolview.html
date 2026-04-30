@@ -40,6 +40,9 @@
         <th data-sort="num">Running</th>
         <th data-sort="num">Idle</th>
         <th data-sort="num">Held</th>
+        <th title="Scheduler universe (DAGMan): Running/Idle/Held">Sched R/I/H</th>
+        <th title="Local universe (per-task helpers): Running/Idle/Held">Local R/I/H</th>
+        <th title="All other universes: Running/Idle/Held">Other R/I/H</th>
         <th data-sort="num">MaxJobs</th>
         <th data-sort="num">%Use</th>
       </tr>
@@ -49,9 +52,12 @@
     <tr>
       <td><a href="/poolview/schedd/{{ name }}">{{ name }}</a></td>
       <td>{{ data.get('CMSGWMS_Type', '') }}</td>
-      <td>{{ data.get('TotalRunningJobs', 0)|fmt }}</td>
-      <td>{{ data.get('TotalIdleJobs', 0)|fmt }}</td>
-      <td>{{ data.get('TotalHeldJobs', 0)|fmt }}</td>
+      <td>{{ data.get('vanillaRunning', 0)|fmt }}</td>
+      <td>{{ data.get('vanillaIdle', 0)|fmt }}</td>
+      <td>{{ data.get('vanillaHeld', 0)|fmt }}</td>
+      <td>{{ data.get('schedulerRunning', 0)|fmt }}/{{ data.get('schedulerIdle', 0)|fmt }}/{{ data.get('schedulerHeld', 0)|fmt }}</td>
+      <td>{{ data.get('localRunning', 0)|fmt }}/{{ data.get('localIdle', 0)|fmt }}/{{ data.get('localHeld', 0)|fmt }}</td>
+      <td>{{ data.get('otherRunning', 0)|fmt }}/{{ data.get('otherIdle', 0)|fmt }}/{{ data.get('otherHeld', 0)|fmt }}</td>
       <td>{{ data.get('MaxJobsRunning', 0)|fmt }}</td>
       {% set pct = data.get('PercentUse', 0) %}
       <td class="{% if pct > 90 %}use-red{% elif pct > 70 %}use-yellow{% else %}use-green{% endif %}">{{ pct }}%</td>

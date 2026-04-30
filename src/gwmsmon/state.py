@@ -184,11 +184,43 @@ class State:
         # Per-site CPU breakdown by accounting category
         site_cpus_cat = {}  # {site: {tier0, production, analysis, other}}
 
+        # Per-schedd, per-universe-bucket counts (Running/Idle/Held).
+        # Buckets: vanilla (5), scheduler (7), local (12), other (rest).
+        # Surfaced on /poolview/ so AP-side load is visible alongside grid
+        # load. We need to count BEFORE filtering out non-Vanilla universes.
+        univ_counts = {}
+
         for job in jobs:
+            schedd_name = job.get("_schedd", "unknown")
+            universe = job.get("JobUniverse")
             status = job.get("JobStatus")
+            if universe == 5:
+                bucket = "vanilla"
+            elif universe == 7:
+                bucket = "scheduler"
+            elif universe == 12:
+                bucket = "local"
+            else:
+                bucket = "other"
+            sd_uc = univ_counts.setdefault(
+                schedd_name,
+                {"vanilla": [0, 0, 0], "scheduler": [0, 0, 0],
+                 "local": [0, 0, 0], "other": [0, 0, 0]})
+            if status == 2:
+                sd_uc[bucket][0] += 1
+            elif status == 1:
+                sd_uc[bucket][1] += 1
+            elif status == 5:
+                sd_uc[bucket][2] += 1
+
+            # Skip scheduler-universe (7) and local-universe (12) jobs:
+            # DAGMan instances and local AP-side helpers that don't carry
+            # AccountingGroup and aren't part of the grid workload. Only
+            # Vanilla universe (5) is real grid load.
+            if universe != 5:
+                continue
             cpus = job.get("RequestCpus", 1) or 1
             schedd_type = job.get("_schedd_type", "unknown")
-            schedd_name = job.get("_schedd", "unknown")
 
             # --- globalview: all jobs, all statuses ---
             self._aggregate_globalview(snap["globalview"], job, status, cpus)
@@ -225,6 +257,14 @@ class State:
                                                  schedd_name)
 
         snap["_site_cpus_cat"] = site_cpus_cat
+
+        # Stamp per-universe-bucket counts onto poolview schedds.
+        for schedd_name, buckets in univ_counts.items():
+            sd = _ensure(snap["poolview"], "schedds", schedd_name)
+            for bucket, counts in buckets.items():
+                sd[f"{bucket}Running"] = counts[0]
+                sd[f"{bucket}Idle"] = counts[1]
+                sd[f"{bucket}Held"] = counts[2]
 
         # Copy fairshare from globalview → poolview (single source of truth)
         snap["poolview"]["fairshare"] = snap["globalview"]["fairshare"]

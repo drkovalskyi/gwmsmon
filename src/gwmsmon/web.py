@@ -346,20 +346,17 @@ def create_app(config_path="/etc/gwmsmon.conf"):
 
         group_totals = fairshare[name]
 
-        # Filter users belonging to this group
+        # Filter users belonging to this group. Use the per-group
+        # counts directly from _group_stats — earlier code summed all
+        # of a user's tasks regardless of group, lumping (e.g.) every
+        # crabtw analysis job under "other".
         workflows = totals_data.get("workflows", {})
         users = []
         for user, data in workflows.items():
-            if name in (data.get("_groups") or []):
-                user_totals = {"Running": 0, "MatchingIdle": 0,
-                               "CpusInUse": 0, "CpusPending": 0}
-                for st, st_data in data.items():
-                    if st.startswith("_"):
-                        continue
-                    for k in user_totals:
-                        user_totals[k] += st_data.get(k, 0)
-                users.append((user, user_totals))
-        users.sort(key=lambda x: -x[1]["CpusInUse"])
+            group_stats = data.get("_group_stats") or {}
+            if name in group_stats:
+                users.append((user, group_stats[name]))
+        users.sort(key=lambda x: -x[1].get("CpusInUse", 0))
 
         # Fair share by tier from accounting ads
         acct_groups = accounting.get("groups", {})

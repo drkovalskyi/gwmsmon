@@ -47,7 +47,27 @@ if [ "$RESTART" = false ]; then
   exit 0
 fi
 
-# --- 3. Stop services and kill orphans ---
+# --- 3. Canary cycle (BEFORE stopping services — zero downtime) ---
+# --check is a no-lock, no-persistence smoke run of the data
+# pipeline; safe to run alongside the live collector. If it fails,
+# the running services keep running, and we abort before touching
+# them.
+echo "==> Canary cycle (--check, runs alongside live collector)"
+canary_log=$(mktemp)
+if ! ssh "$HOST" \
+    "PYTHONPATH=/opt/gwmsmon/src /usr/bin/python3 -m gwmsmon.collector --config /etc/gwmsmon.conf --check" \
+    >"$canary_log" 2>&1; then
+  echo "==> Canary FAILED — services were NOT touched, fix and re-run"
+  echo "--- last 40 lines of canary output ---"
+  tail -40 "$canary_log"
+  rm -f "$canary_log"
+  exit 1
+fi
+tail -3 "$canary_log"
+rm -f "$canary_log"
+echo "  Canary OK"
+
+# --- 4. Stop services and kill orphans ---
 echo "==> Stopping services"
 ssh "$HOST" bash <<'STOP'
 sudo systemctl stop gwmsmon-collect gwmsmon-web 2>/dev/null || true
@@ -73,7 +93,7 @@ fi
 echo "  All processes stopped"
 STOP
 
-# --- 4. Install service files if changed ---
+# --- 5. Install service files if changed ---
 echo "==> Installing service files"
 ssh "$HOST" bash <<INSTALL
 RELOAD=false
@@ -89,19 +109,6 @@ if [ "\$RELOAD" = true ]; then
   sudo systemctl daemon-reload
 fi
 INSTALL
-
-# --- 5. Canary cycle ---
-# Run a single collection cycle against the real pool with the new
-# code BEFORE letting systemd start the long-running collector. If
-# this exits non-zero, the new code crashed in the data pipeline and
-# we abort the deploy with services still stopped — easier to roll
-# back than fix a crashloop.
-echo "==> Canary cycle (one collection round, takes ~1 min)"
-if ! ssh "$HOST" "/usr/bin/python3 -m gwmsmon.collector --config /etc/gwmsmon.conf --once 2>&1 | tail -40"; then
-  echo "==> Canary FAILED — services left stopped, fix and re-run"
-  exit 1
-fi
-echo "  Canary OK"
 
 # --- 6. Start services ---
 echo "==> Starting services"

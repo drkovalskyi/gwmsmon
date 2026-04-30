@@ -43,6 +43,11 @@ def main():
         help="run a single collection cycle and exit"
     )
     parser.add_argument(
+        "--check", action="store_true",
+        help=("dry-run one cycle (no lock, no persistence) for use as "
+              "a deploy canary; safe to run alongside the live collector")
+    )
+    parser.add_argument(
         "--verbose", action="store_true",
         help="enable verbose logging"
     )
@@ -52,6 +57,29 @@ def main():
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+
+    # --check: data-pipeline smoke test, no lock, no flush.
+    # Exits non-zero on any pipeline failure; deploy.sh aborts.
+    if args.check:
+        cfg = config.load(args.config)
+        log.info("--- canary check ---")
+        t0 = time.time()
+        try:
+            state = State()
+            jobs, summary_ads, factory_data, schedd_info = query_all(cfg)
+            neg_hosts = cfg.get("htcondor", "negotiator_collectors",
+                                fallback="")
+            accounting_ads = query_accounting_ads(neg_hosts) if neg_hosts else []
+            state.update(jobs, summary_ads, factory_data, accounting_ads)
+            del jobs, summary_ads, factory_data, accounting_ads
+            gc.collect()
+            history_jobs, _ = query_history_parallel(schedd_info, {})
+            state.update_exit_codes(history_jobs)
+        except Exception:
+            log.error("canary failed", exc_info=True)
+            sys.exit(1)
+        log.info("canary OK in %.1fs", time.time() - t0)
+        sys.exit(0)
 
     # Ensure files are world-readable for Apache
     os.umask(0o022)

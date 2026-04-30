@@ -117,3 +117,66 @@ def test_security_headers_present(client):
     assert rv.headers.get("X-Content-Type-Options") == "nosniff"
     assert rv.headers.get("X-Frame-Options") == "DENY"
     assert "Content-Security-Policy" in rv.headers
+
+
+def test_group_detail_uses_only_matching_group_counts(tmp_path):
+    """Regression: /globalview/group/<name> previously summed all of
+    a user's jobs (across every group they belonged to) instead of
+    just those in the requested group. Crabtw with 100k analysis +
+    4k 'other' was showing ~104k under both groups."""
+    # Set up basedirs
+    basedirs = {}
+    for view in ("prodview", "analysisview", "globalview",
+                 "poolview", "factoryview"):
+        d = tmp_path / view
+        d.mkdir()
+        basedirs[view] = str(d)
+    cfg_path = tmp_path / "gwmsmon.conf"
+    lines = ["[htcondor]", "pool = test-collector.local:9618"]
+    for view, d in basedirs.items():
+        lines.append(f"[{view}]")
+        lines.append(f"basedir = {d}")
+    cfg_path.write_text("\n".join(lines))
+
+    cfg = gw_config.load(str(cfg_path))
+
+    # Build jobs: one Owner=crabtw with 5 analysis jobs and 2 "other"
+    # (AccountingGroup missing) jobs.
+    base = {
+        "JobStatus": 2, "JobUniverse": 5, "RequestCpus": 1,
+        "Owner": "crabtw", "AcctGroup": "analysis",
+        "DESIRED_Sites": "T2_CH_CERN",
+        "MATCH_GLIDEIN_CMSSite": "T2_CH_CERN",
+        "JobPrio": 0, "CRAB_UserHN": "alice",
+        "CRAB_ReqName": "alice:task1",
+        "_schedd": "crab3@vocms0121.cern.ch",
+        "_schedd_type": "crabschedd",
+    }
+    jobs = []
+    for _ in range(5):
+        j = dict(base)
+        j["AccountingGroup"] = "analysis.alice"
+        jobs.append(j)
+    for _ in range(2):
+        j = dict(base)
+        # AccountingGroup intentionally missing → category "other"
+        jobs.append(j)
+
+    s = State()
+    s.update(jobs, summary_ads={}, factory_data={})
+    s.flush_snapshot(cfg)
+
+    app = create_app(str(cfg_path))
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    # Hit the "other" group page; expect exactly 2 Running jobs for
+    # crabtw, NOT 7.
+    rv = client.get("/globalview/group/other")
+    assert rv.status_code == 200
+    body = rv.data.decode()
+    # The user row in the table should reflect 2 jobs (the "other" ones).
+    # Anchor on the user name; verify 7 is absent and 2 is present.
+    assert "crabtw" in body
+    assert "<td>7</td>" not in body, \
+        "regression: group page summed all user jobs across groups"

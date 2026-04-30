@@ -1,14 +1,18 @@
 #!/bin/bash
 # Deploy gwmsmon to vocms860.cern.ch
 #
-# Usage: ./deploy.sh [--restart]
+# Usage: ./deploy.sh [--restart] [--canary]
 #   --restart   restart collector and web after sync (default: sync only)
+#   --canary    additionally run one --check cycle alongside the live
+#               collector before restarting services; aborts deploy on
+#               failure (off by default — pytest covers most regressions)
 #
 # What it does:
 #   1. Syncs src/gwmsmon/ and systemd/ to the server with correct permissions
 #   2. Clears __pycache__ so new code is picked up
-#   3. Optionally stops services, kills orphans, installs service files,
-#      starts services via systemd, verifies health
+#   3. (--canary only) runs gwmsmon-collect --check against the live pool
+#   4. With --restart: stops services, installs unit files, starts services,
+#      verifies health
 
 set -euo pipefail
 
@@ -18,10 +22,12 @@ REMOTE_SRC="$REMOTE_BASE/src/gwmsmon"
 LOCAL_SRC="$(dirname "$0")/src/gwmsmon"
 LOCAL_SYSTEMD="$(dirname "$0")/systemd"
 RESTART=false
+CANARY=false
 
 for arg in "$@"; do
   case "$arg" in
     --restart) RESTART=true ;;
+    --canary) CANARY=true ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
@@ -47,25 +53,28 @@ if [ "$RESTART" = false ]; then
   exit 0
 fi
 
-# --- 3. Canary cycle (BEFORE stopping services — zero downtime) ---
-# --check is a no-lock, no-persistence smoke run of the data
-# pipeline; safe to run alongside the live collector. If it fails,
-# the running services keep running, and we abort before touching
-# them.
-echo "==> Canary cycle (--check, runs alongside live collector)"
-canary_log=$(mktemp)
-if ! ssh "$HOST" \
-    "PYTHONPATH=/opt/gwmsmon/src /usr/bin/python3 -m gwmsmon.collector --config /etc/gwmsmon.conf --check" \
-    >"$canary_log" 2>&1; then
-  echo "==> Canary FAILED — services were NOT touched, fix and re-run"
-  echo "--- last 40 lines of canary output ---"
-  tail -40 "$canary_log"
+# --- 3. Optional canary cycle (--canary) ---
+# Off by default — `pytest` already covers regressions in <2s. Use
+# --canary when changing the data pipeline (query/state/convert) and
+# you want a real-pool smoke run before flipping services. Runs the
+# new code's --check mode alongside the live collector (no lock, no
+# flush) and aborts the deploy on failure without touching services.
+if [ "$CANARY" = true ]; then
+  echo "==> Canary cycle (--check, runs alongside live collector)"
+  canary_log=$(mktemp)
+  if ! ssh "$HOST" \
+      "PYTHONPATH=/opt/gwmsmon/src /usr/bin/python3 -m gwmsmon.collector --config /etc/gwmsmon.conf --check" \
+      >"$canary_log" 2>&1; then
+    echo "==> Canary FAILED — services were NOT touched, fix and re-run"
+    echo "--- last 40 lines of canary output ---"
+    tail -40 "$canary_log"
+    rm -f "$canary_log"
+    exit 1
+  fi
+  tail -3 "$canary_log"
   rm -f "$canary_log"
-  exit 1
+  echo "  Canary OK"
 fi
-tail -3 "$canary_log"
-rm -f "$canary_log"
-echo "  Canary OK"
 
 # --- 4. Stop services and kill orphans ---
 echo "==> Stopping services"

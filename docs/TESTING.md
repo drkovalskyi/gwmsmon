@@ -25,16 +25,22 @@ installed — `tests/conftest.py` installs an in-process stub for the
 
 ## Pre-deploy validation
 
-`./deploy.sh --restart` runs in-process safety checks beyond the unit
-suite:
+`./deploy.sh --restart` runs a fast post-restart health check —
+every overview route + `/status` must return 200, otherwise the
+deploy exits non-zero. That's the default; nothing else is gated on
+deploy time so iteration stays fast (~10–15 s including stop/start).
 
-1. **Canary cycle**: between stopping and starting services, one real
-   `gwmsmon-collect --config /etc/gwmsmon.conf --once` is invoked
-   against the live pool with the new code. If the cycle exits
-   non-zero, the deploy aborts with services left stopped — easier to
-   roll back than to fix a crashloop.
-2. **Multi-route health check**: after services are up, every overview
-   route + `/status` is requested. Any non-200 fails the deploy.
+For changes to the data pipeline (query/state/convert) where you
+want a real-pool smoke run before flipping services, add `--canary`:
+
+```bash
+./deploy.sh --restart --canary
+```
+
+This runs `gwmsmon-collect --check` (no lock, no flushes — safe
+alongside the live collector) on the new code BEFORE stopping
+services. If it fails, services are left running on the old code.
+Adds ~100 s to the deploy.
 
 ## CI
 

@@ -268,6 +268,39 @@ def test_flush_writes_atomic_no_tmp_leftovers(populated_state, tmp_path):
     assert leftovers == []
 
 
+def test_flush_writes_globalview_owner_rollup(tmp_path):
+    """Regression: /globalview/request/<owner> reads
+    basedir/<owner>/exit_codes.json. Exit codes are tracked per
+    <owner>/<task> key so we must roll them up per owner before
+    flushing."""
+    import time as _time
+    cfg = _make_cfg(tmp_path)
+    s = State()
+    # Use the current minute bucket so the 1h window includes the data
+    minute = int(_time.time()) // 60 * 60
+    s.updated = minute
+    s.exit_codes["globalview"] = {
+        "alice/taskA": {minute: {"0": 5, "1": 1}},
+        "alice/taskB": {minute: {"0": 3, "11": 2}},
+        "bob/taskC":   {minute: {"0": 7}},
+    }
+    s.flush_exit_codes(cfg)
+    alice_path = tmp_path / "globalview" / "alice" / "exit_codes.json"
+    bob_path = tmp_path / "globalview" / "bob" / "exit_codes.json"
+    assert alice_path.exists(), "alice owner roll-up missing"
+    assert bob_path.exists(), "bob owner roll-up missing"
+    alice = json.loads(alice_path.read_text())
+    # 1h window should sum: total=5+1+3+2=11, failures=1+2=3
+    assert alice["windows"]["1h"]["total"] == 11
+    assert alice["windows"]["1h"]["failures"] == 3
+    assert alice["windows"]["1h"]["codes"] == {"0": 8, "1": 1, "11": 2}
+    bob = json.loads(bob_path.read_text())
+    assert bob["windows"]["1h"]["total"] == 7
+    assert bob["windows"]["1h"]["failures"] == 0
+    assert (tmp_path / "globalview" / "alice"
+            / "completion_histogram.json").exists()
+
+
 def test_flush_skips_missing_basedir(populated_state, tmp_path):
     """If a view's basedir doesn't exist, flush should skip silently
     (not crash). Mirrors the running collector if a basedir is misconfigured."""

@@ -1191,6 +1191,168 @@ class State:
             "failure": [bucket_totals[t]["failure"] for t in timestamps],
         }
 
+    def _flush_globalview_owner_rollup(self, basedir, flat, now_bucket):
+        """Aggregate exit-code/efficiency stats per owner across all
+        their tasks and write basedir/<owner>/exit_codes.json plus
+        basedir/<owner>/completion_histogram.json. Globalview only —
+        the URL /globalview/request/<owner> wants a single roll-up,
+        not a per-task drill-down.
+        """
+        view = "globalview"
+        owners = sorted({wf.split("/", 1)[0] for wf in flat if "/" in wf})
+        for owner in owners:
+            if not _safe_name(owner):
+                continue
+            owner_wfs = [wf for wf in flat if wf.startswith(owner + "/")]
+            if not owner_wfs:
+                continue
+
+            ec_view = self.exit_codes.get(view, {})
+            ec_site_view = self.exit_codes_by_site.get(view, {})
+            eff_view = self.efficiency.get(view, {})
+            eff_site_view = self.efficiency_by_site.get(view, {})
+
+            # Window-level exit code rollup
+            owner_windows = {}
+            for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                cutoff = now_bucket - wsec
+                wcodes = {}
+                for wf in owner_wfs:
+                    for ts, tcodes in ec_view.get(wf, {}).items():
+                        if ts < cutoff:
+                            continue
+                        for code, cnt in tcodes.items():
+                            wcodes[code] = wcodes.get(code, 0) + cnt
+                wtotal = sum(wcodes.values())
+                wfail = sum(v for k, v in wcodes.items() if k != "0")
+                owner_windows[wlabel] = {
+                    "total": wtotal,
+                    "failures": wfail,
+                    "failure_rate": (round(wfail / wtotal, 4)
+                                     if wtotal else 0),
+                    "codes": wcodes,
+                }
+
+            # Per-site rollup with summed efficiency
+            sites_for_owner = set()
+            for wf in owner_wfs:
+                sites_for_owner.update(ec_site_view.get(wf, {}).keys())
+            owner_sites_ec = {}
+            for site in sites_for_owner:
+                site_windows = {}
+                for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                    cutoff = now_bucket - wsec
+                    total = failures = 0
+                    cpu = wall_cpus = slot_ok = slot_all = 0
+                    for wf in owner_wfs:
+                        for ts, scodes in (ec_site_view.get(wf, {})
+                                           .get(site, {}).items()):
+                            if ts < cutoff:
+                                continue
+                            for code, cnt in scodes.items():
+                                total += cnt
+                                if code != "0":
+                                    failures += cnt
+                        for ts, b in (eff_site_view.get(wf, {})
+                                      .get(site, {}).items()):
+                            if ts < cutoff:
+                                continue
+                            cpu += b.get("cpu", 0)
+                            wall_cpus += b.get("wall_cpus", 0)
+                            slot_ok += b.get("slot_ok", 0)
+                            slot_all += b.get("slot_all", 0)
+                    if total:
+                        site_windows[wlabel] = {
+                            "total": total,
+                            "failures": failures,
+                            "failure_rate": round(failures / total, 4),
+                            "running_eff": (round(cpu / wall_cpus, 4)
+                                            if wall_cpus else 0),
+                            "processing_eff": (round(slot_ok / slot_all, 4)
+                                               if slot_all else 0),
+                        }
+                if site_windows:
+                    owner_sites_ec[site] = site_windows
+
+            # Window-level efficiency rollup
+            owner_eff = {}
+            for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                cutoff = now_bucket - wsec
+                cpu = wall_cpus = slot_ok = slot_all = 0
+                for wf in owner_wfs:
+                    for ts, b in eff_view.get(wf, {}).items():
+                        if ts < cutoff:
+                            continue
+                        cpu += b.get("cpu", 0)
+                        wall_cpus += b.get("wall_cpus", 0)
+                        slot_ok += b.get("slot_ok", 0)
+                        slot_all += b.get("slot_all", 0)
+                owner_eff[wlabel] = {
+                    "running_eff": (round(cpu / wall_cpus, 4)
+                                    if wall_cpus else 0),
+                    "processing_eff": (round(slot_ok / slot_all, 4)
+                                       if slot_all else 0),
+                    "cpu_hours": round(cpu / 3600, 1),
+                    "wall_cpu_hours": round(wall_cpus / 3600, 1),
+                }
+
+            # Lifetime efficiency rollup
+            lt_cpu = lt_wall = lt_slot_ok = lt_slot_all = 0
+            for wf in owner_wfs:
+                lt = self.efficiency_lifetime.get(wf)
+                if lt:
+                    lt_cpu += lt.get("cpu", 0)
+                    lt_wall += lt.get("wall_cpus", 0)
+                    lt_slot_ok += lt.get("slot_ok", 0)
+                    lt_slot_all += lt.get("slot_all", 0)
+            owner_lt_eff = None
+            if lt_wall:
+                owner_lt_eff = {
+                    "running_eff": round(lt_cpu / lt_wall, 4),
+                    "processing_eff": (round(lt_slot_ok / lt_slot_all, 4)
+                                       if lt_slot_all else 0),
+                    "cpu_hours": round(lt_cpu / 3600, 1),
+                    "wall_cpu_hours": round(lt_wall / 3600, 1),
+                }
+
+            # Backward-compat top-level mirrors 1h window
+            ow_1h = owner_windows.get("1h", {})
+            owner_dir = os.path.join(basedir,
+                                     owner.replace("/", os.sep))
+            os.makedirs(owner_dir, exist_ok=True)
+            _atomic_json(os.path.join(owner_dir, "exit_codes.json"), {
+                "updated": self.updated,
+                "codes": ow_1h.get("codes", {}),
+                "total": ow_1h.get("total", 0),
+                "failures": ow_1h.get("failures", 0),
+                "failure_rate": ow_1h.get("failure_rate", 0),
+                "windows": owner_windows,
+                "sites": owner_sites_ec,
+                "efficiency": owner_eff,
+                "lifetime_efficiency": owner_lt_eff,
+            })
+
+            # Owner completion histogram: sum success/failure per bucket
+            owner_hist = {}
+            for wf in owner_wfs:
+                for ts, tcodes in ec_view.get(wf, {}).items():
+                    if ts not in owner_hist:
+                        owner_hist[ts] = {"success": 0, "failure": 0}
+                    for code, cnt in tcodes.items():
+                        if code == "0":
+                            owner_hist[ts]["success"] += cnt
+                        else:
+                            owner_hist[ts]["failure"] += cnt
+            hist_ts = sorted(owner_hist.keys())
+            _atomic_json(
+                os.path.join(owner_dir, "completion_histogram.json"), {
+                "updated": self.updated,
+                "bucket_size": EXIT_CODE_BUCKET,
+                "timestamps": hist_ts,
+                "success": [owner_hist[t]["success"] for t in hist_ts],
+                "failure": [owner_hist[t]["failure"] for t in hist_ts],
+            })
+
     def flush_exit_codes(self, cfg):
         """Write exit code JSON files for each view."""
         for view in ("prodview", "analysisview", "globalview"):
@@ -1383,6 +1545,15 @@ class State:
                     "success": [wf_hist[t]["success"] for t in hist_ts],
                     "failure": [wf_hist[t]["failure"] for t in hist_ts],
                 })
+
+            # globalview-only: per-owner roll-up. Exit codes are tracked
+            # per "<owner>/<task>" key, but the URL /globalview/request/<owner>
+            # expects a roll-up across all of that owner's tasks. Sum
+            # window/site/efficiency raw state across each owner's tasks
+            # and write basedir/<owner>/exit_codes.json + completion_histogram.
+            if view == "globalview":
+                self._flush_globalview_owner_rollup(
+                    basedir, flat, now_site)
 
             _atomic_json(os.path.join(basedir, "wf_completion.json"), {
                 "updated": self.updated,

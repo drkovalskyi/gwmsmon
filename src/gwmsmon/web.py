@@ -100,21 +100,26 @@ def _format_number(n):
 def _annotate_exit_codes(exit_codes):
     """Add descriptions to exit code dicts.
 
-    Transforms exit_codes.codes from {"code": count} to a list of
-    {"code": str, "count": int, "desc": str} sorted by count desc.
+    Transforms each {"code": count} dict (top-level and per-window)
+    into a list of {"code": str, "count": int, "desc": str} sorted
+    by count desc. Stored under "annotated" alongside the original
+    "codes" so templates can pick whichever window they want.
     """
-    if not exit_codes or "codes" not in exit_codes:
+    if not exit_codes:
         return exit_codes
-    codes = exit_codes["codes"]
-    annotated = []
-    for code, count in codes.items():
-        annotated.append({
-            "code": code,
-            "count": count,
-            "desc": _describe_exit_code(code),
-        })
-    annotated.sort(key=lambda x: -x["count"])
-    exit_codes["annotated"] = annotated
+
+    def _annotate(codes_dict):
+        out = [{"code": c, "count": n,
+                "desc": _describe_exit_code(c)}
+               for c, n in codes_dict.items()]
+        out.sort(key=lambda x: -x["count"])
+        return out
+
+    if "codes" in exit_codes:
+        exit_codes["annotated"] = _annotate(exit_codes["codes"])
+    for wlabel, w in (exit_codes.get("windows") or {}).items():
+        if isinstance(w, dict) and "codes" in w:
+            w["annotated"] = _annotate(w["codes"])
     return exit_codes
 
 
@@ -422,6 +427,43 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         if not st_data:
             abort(404)
         debug_info = st_data.get("_debug", {})
+        # Per-subtask summary + per-site breakdown directly from
+        # detail.json (available in globalview/analysisview where the
+        # subtask key holds these alongside _debug).
+        st_summary = st_data.get("Summary", {})
+        live_sites = {k: v for k, v in st_data.items()
+                      if isinstance(v, dict)
+                      and not k.startswith("_")
+                      and k != "Summary"}
+
+        # Per-subtask completion stats. For globalview the per-task
+        # exit_codes.json sits at <basedir>/<name>/<subtask>/exit_codes.json
+        # (written by flush_exit_codes for each <owner>/<task> key).
+        # Falls back to None if not present (prodview's per-subtask
+        # data isn't tracked separately, only per-workflow).
+        sub_dir = _safe_path(basedir, os.path.join(
+            name.replace("/", os.sep),
+            subtask.replace("/", os.sep)))
+        exit_codes = _annotate_exit_codes(
+            _load_json(sub_dir, "exit_codes.json"))
+        site_exit_codes = exit_codes.get("sites", {}) if exit_codes else {}
+
+        # Merge: sites with currently running/idle jobs PLUS sites that
+        # appear only in completion stats (recently finished, no live
+        # jobs). The latter were previously hidden.
+        all_site_names = set(live_sites) | set(site_exit_codes)
+        st_sites = [
+            (sname, live_sites.get(sname, {}))
+            for sname in all_site_names
+        ]
+        # Sort: live activity first, then by 7d completed desc
+        def _site_sort_key(item):
+            sname, sdata = item
+            sec7 = site_exit_codes.get(sname, {}).get("7d", {})
+            return (-sdata.get("Running", 0),
+                    -sec7.get("total", 0))
+        st_sites.sort(key=_site_sort_key)
+
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
         return render_template(
@@ -431,6 +473,10 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             name=name,
             subtask=subtask,
             debug_info=debug_info,
+            st_summary=st_summary,
+            st_sites=st_sites,
+            exit_codes=exit_codes,
+            site_exit_codes=site_exit_codes,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,
@@ -475,11 +521,17 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             for k in req_totals:
                 req_totals[k] += st_data.get(k, 0)
 
-        # Site breakdown from detail.json
-        sites = detail.get("sites", {})
-        sorted_sites = sorted(
-            sites.items(),
-            key=lambda x: -x[1].get("Running", 0),
+        # Site breakdown: union of live sites (currently running/idle)
+        # and sites that only show up in completion stats.
+        live_sites = detail.get("sites", {}) or {}
+        all_site_names = set(live_sites) | set(site_exit_codes)
+        sorted_sites = [(s, live_sites.get(s, {}))
+                        for s in all_site_names]
+        sorted_sites.sort(
+            key=lambda x: (
+                -x[1].get("Running", 0),
+                -site_exit_codes.get(x[0], {}).get("7d", {}).get("total", 0),
+            ),
         )
 
         return render_template(
@@ -547,6 +599,12 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         if name not in schedds:
             abort(404)
         schedd_data = schedds[name]
+        # Per-task breakdown: sort by Running desc, then idle desc.
+        tasks = sorted(
+            schedd_data.get("_tasks", {}).items(),
+            key=lambda kv: (-kv[1].get("Running", 0),
+                            -kv[1].get("MatchingIdle", 0)),
+        )
         updated = summary.get("updated", 0)
         return render_template(
             "schedd.html",
@@ -554,6 +612,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             view_cfg=VIEWS["poolview"],
             name=name,
             schedd_data=schedd_data,
+            tasks=tasks,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,

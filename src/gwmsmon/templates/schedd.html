@@ -36,4 +36,39 @@
   <div class="chart" data-src="/poolview/tsdata/schedd/{{ name }}" data-interval="daily" data-chart-type="simple"></div>
   <div class="chart" data-src="/poolview/tsdata/schedd/{{ name }}" data-interval="weekly" data-chart-type="simple"></div>
 </div>
+
+{% if tasks %}
+<details class="section" open data-section="poolview_schedd_tasks">
+  <summary><h2>Tasks ({{ tasks|length }})</h2></summary>
+  <input type="text" class="table-filter" placeholder="Filter..." data-table="tasks-table">
+  <div class="table-scroll">
+  <table class="data-table sortable" id="tasks-table" data-sort-default="2:desc">
+    <thead>
+      <tr>
+        <th>Owner</th>
+        <th>Task</th>
+        <th data-sort="num">Running</th>
+        <th data-sort="num">Idle</th>
+        <th data-sort="num">Held</th>
+        <th data-sort="num">CPUs Use</th>
+        <th data-sort="num">CPUs Pend</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for tname, tdata in tasks %}
+    <tr>
+      <td>{{ tdata.get('Owner', '') }}</td>
+      <td title="{{ tname }}">{{ tname }}</td>
+      <td>{{ tdata.get('Running', 0)|fmt }}</td>
+      <td>{{ tdata.get('MatchingIdle', 0)|fmt }}</td>
+      <td>{{ tdata.get('Held', 0)|fmt }}</td>
+      <td>{{ tdata.get('CpusInUse', 0)|fmt }}</td>
+      <td>{{ tdata.get('CpusPending', 0)|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endif %}
 {% endblock %}

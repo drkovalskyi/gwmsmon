@@ -114,13 +114,21 @@ def _ensure(d, *keys):
     return d
 
 
+_ZERO_KEYS = ("Running", "MatchingIdle", "CpusInUse", "CpusPending")
+_ZERO_TEMPLATE = {k: 0 for k in _ZERO_KEYS}
+
+
 def _zero_counts():
-    return {
-        "Running": 0,
-        "MatchingIdle": 0,
-        "CpusInUse": 0,
-        "CpusPending": 0,
-    }
+    return _ZERO_TEMPLATE.copy()
+
+
+def _ensure_counts(d):
+    """Initialize d with zero counts on first call. Replaces the
+    `for k in _ZERO_KEYS: d.setdefault(k, 0)` pattern: one dict
+    lookup + one C-level update vs four setdefaults. Saves ~30s/cycle
+    when called millions of times in the per-job aggregation."""
+    if "Running" not in d:
+        d.update(_ZERO_TEMPLATE)
 
 
 def _add_counts(target, status, cpus):
@@ -165,6 +173,9 @@ class State:
         self.updated = 0
         self.exit_codes = {}         # {view: {workflow: {minute_ts: {code: count}}}}
         self.exit_codes_by_site = {} # {view: {workflow: {site: {minute_ts: {code: count}}}}}
+        # prodview-only: per-(request, subtask) breakdown to surface
+        # failures on the Subtasks table of /prodview/request/<wf>
+        self.exit_codes_by_subtask = {}  # {request: {subtask: {minute_ts: {code: count}}}}
         self.exit_code_detail = {}   # {view: {code: {workflow: count, site: count, ...}}}
         self.failed_job_records = {} # {view: {site: {workflow: [record, ...]}}}
         self.efficiency = {}         # {view: {wf: {ts: {cpu, wall_cpus, slot_ok, slot_all}}}}
@@ -178,6 +189,14 @@ class State:
         One pass through all jobs, routing each to the relevant views
         based on job attributes and source schedd type.
         """
+        # One-shot cProfile of state.update for diagnosing hot
+        # functions. Triggered by env var; logs top 25 cumtime.
+        _profile_this = os.environ.get("GWMSMON_PROFILE_UPDATE") == "1"
+        _prof = None
+        if _profile_this:
+            import cProfile
+            _prof = cProfile.Profile()
+            _prof.enable()
         t0 = time.time()
         snap = self._empty_snapshot()
 
@@ -189,8 +208,15 @@ class State:
         # Surfaced on /poolview/ so AP-side load is visible alongside grid
         # load. We need to count BEFORE filtering out non-Vanilla universes.
         univ_counts = {}
+        t_loop_start = time.time()
+        n_jobs_seen = 0
+        n_vanilla = 0
+        n_globalview = 0
+        n_prodview = 0
+        n_analysisview = 0
 
         for job in jobs:
+            n_jobs_seen += 1
             schedd_name = job.get("_schedd", "unknown")
             universe = job.get("JobUniverse")
             status = job.get("JobStatus")
@@ -219,11 +245,56 @@ class State:
             # Vanilla universe (5) is real grid load.
             if universe != 5:
                 continue
+            n_vanilla += 1
             cpus = job.get("RequestCpus", 1) or 1
             schedd_type = job.get("_schedd_type", "unknown")
 
+            # Parse DESIRED_Sites once and stash on the job dict so
+            # the three aggregators read it back instead of each
+            # re-running split+strip. ~270M strip calls / cycle saved.
+            desired = job.get("DESIRED_Sites")
+            if desired:
+                ds_list = [s.strip() for s in desired.split(",")
+                            if s.strip()]
+            else:
+                ds_list = []
+            job["_desired_sites_list"] = ds_list
+            job["_desired_unique"] = (len(ds_list) == 1)
+
+            # --- per-schedd task breakdown for /poolview/schedd/<name>
+            # Same task-key derivation as globalview so users see the
+            # same task identifiers wherever they land.
+            owner = job.get("Owner", "unknown")
+            dagman_id = job.get("DAGManJobId")
+            condora_req = job.get("CONDORA_RequestName")
+            sched_task = (job.get("CRAB_ReqName")
+                          or job.get("WMAgent_RequestName")
+                          or condora_req
+                          or (f"{schedd_name}#{dagman_id}"
+                              if dagman_id else None)
+                          or job.get("SubmitFile")
+                          or "unknown")
+            condora_round = job.get("CONDORA_Round")
+            if condora_req and condora_round is not None:
+                sched_task = f"{sched_task}/{condora_round}"
+            sd_task = _ensure(snap["poolview"], "schedds",
+                              schedd_name, "_tasks", sched_task)
+            sd_task.setdefault("Owner", owner)
+            for k in ("Running", "MatchingIdle", "Held",
+                      "CpusInUse", "CpusPending"):
+                sd_task.setdefault(k, 0)
+            if status == 2:
+                sd_task["Running"] += 1
+                sd_task["CpusInUse"] += cpus
+            elif status == 1:
+                sd_task["MatchingIdle"] += 1
+                sd_task["CpusPending"] += cpus
+            elif status == 5:
+                sd_task["Held"] += 1
+
             # --- globalview: all jobs, all statuses ---
             self._aggregate_globalview(snap["globalview"], job, status, cpus)
+            n_globalview += 1
 
             # Only Idle (1) and Running (2) for prodview/analysisview
             if status not in (1, 2):
@@ -247,6 +318,7 @@ class State:
             if request:
                 self._aggregate_prodview(snap["prodview"], job, status,
                                          cpus, request, schedd_name)
+                n_prodview += 1
 
             # --- analysisview: jobs from crabschedd ---
             if schedd_type == "crabschedd":
@@ -255,8 +327,32 @@ class State:
                     self._aggregate_analysisview(snap["analysisview"], job,
                                                  status, cpus, user,
                                                  schedd_name)
+                    n_analysisview += 1
 
+        t_loop_end = time.time()
+        log.info(
+            "update loop: %.1fs over %d jobs (%d vanilla, "
+            "%d globalview, %d prodview, %d analysisview)",
+            t_loop_end - t_loop_start, n_jobs_seen,
+            n_vanilla, n_globalview, n_prodview, n_analysisview)
         snap["_site_cpus_cat"] = site_cpus_cat
+
+        # Merge batched per-view per-site idle pressure into view["sites"].
+        # Replaces ~80M _ensure+_ensure_counts+setdefault calls done
+        # inside the per-job loop with a few hundred dict ops here.
+        for view_name in ("prodview", "analysisview", "globalview"):
+            view = snap[view_name]
+            sites_idle = view.pop("_sites_idle", {})
+            view_sites = view["sites"]
+            for s, b in sites_idle.items():
+                sv = view_sites.get(s)
+                if sv is None:
+                    sv = view_sites[s] = _ZERO_TEMPLATE.copy()
+                elif "Running" not in sv:
+                    sv.update(_ZERO_TEMPLATE)
+                sv["MatchingIdle"] += b[0]
+                sv["CpusPending"] += b[1]
+                sv["UniquePressure"] = sv.get("UniquePressure", 0) + b[2]
 
         # Stamp per-universe-bucket counts onto poolview schedds.
         for schedd_name, buckets in univ_counts.items():
@@ -269,17 +365,32 @@ class State:
         # Copy fairshare from globalview → poolview (single source of truth)
         snap["poolview"]["fairshare"] = snap["globalview"]["fairshare"]
 
+        t_proc = time.time()
         # --- Summary ads → globalview pool-wide, poolview ---
         self._process_summary_ads(snap, summary_ads)
-
+        t_summ = time.time()
         # --- Factory data → factoryview, globalview ---
         self._process_factory_data(snap, factory_data)
-
+        t_fact = time.time()
         # --- Accounting ads → globalview ---
         self._process_accounting_ads(snap, accounting_ads or [])
+        t_acct = time.time()
+        log.info(
+            "update post-loop: summary=%.1fs factory=%.1fs accounting=%.1fs",
+            t_summ - t_proc, t_fact - t_summ, t_acct - t_fact)
 
         self.snapshot = snap
         self.updated = time.time()
+
+        if _prof is not None:
+            _prof.disable()
+            import io
+            import pstats
+            buf = io.StringIO()
+            pstats.Stats(_prof, stream=buf) \
+                .sort_stats("cumulative").print_stats(25)
+            log.info("cProfile state.update top 25 cumulative:\n%s",
+                     buf.getvalue())
 
         log.info("snapshot updated in %.2fs: "
                  "prodview=%d workflows, analysisview=%d users, "
@@ -298,12 +409,17 @@ class State:
                 "priorities": {},
                 "site_priorities": {},
                 "schedds": {},
+                # Transient: per-site idle pressure accumulator.
+                # Merged into "sites" after the per-job loop.
+                # {site: [matching_idle, cpus_pending, unique_pressure]}
+                "_sites_idle": {},
             },
             "analysisview": {
                 "workflows": {},
                 "sites": {},
                 "totals": _zero_counts(),
                 "schedds": {},
+                "_sites_idle": {},
             },
             "globalview": {
                 "users": {},
@@ -315,6 +431,7 @@ class State:
                 "user_summary": {},
                 "negotiator": {},
                 "accounting": {},
+                "_sites_idle": {},
             },
             "poolview": {
                 "schedds": {},
@@ -336,13 +453,13 @@ class State:
                             schedd_name):
         subtask = job.get("WMAgent_SubTaskName", request)
         site = job.get("MATCH_GLIDEIN_CMSSite")
-        desired = job.get("DESIRED_Sites")
         prio = _prio_block(job.get("JobPrio"))
+        desired_sites_list = job.get("_desired_sites_list", ())
+        unique_site = job.get("_desired_unique", False)
 
         # workflows[request][subtask]["Summary"]
         st = _ensure(view["workflows"], request, subtask, "Summary")
-        for k, v in _zero_counts().items():
-            st.setdefault(k, 0)
+        _ensure_counts(st)
         _add_counts(st, status, cpus)
 
         # per-request metadata (capture once from first job)
@@ -368,20 +485,16 @@ class State:
         # workflows[request][subtask][site] (if running at a site)
         if site and status == 2:
             ss = _ensure(view["workflows"], request, subtask, site)
-            for k, v in _zero_counts().items():
-                ss.setdefault(k, 0)
+            _ensure_counts(ss)
             _add_counts(ss, status, cpus)
 
         # Per-site idle pressure (if idle with desired sites)
-        if status == 1 and desired:
-            sites = [s.strip() for s in desired.split(",")]
-            unique = len(sites) == 1
-            for s in sites:
+        if status == 1 and desired_sites_list:
+            for s in desired_sites_list:
                 ss = _ensure(view["workflows"], request, subtask, s)
-                for k, v in _zero_counts().items():
-                    ss.setdefault(k, 0)
+                _ensure_counts(ss)
                 _add_counts(ss, status, cpus)
-                if unique:
+                if unique_site:
                     ss.setdefault("UniquePressure", 0)
                     ss["UniquePressure"] += 1
 
@@ -389,16 +502,12 @@ class State:
         walltime = str(job.get("OriginalMaxWallTimeMins", 0))
         memory = str(job.get("OriginalMemory", 0))
         req_cpus = str(job.get("RequestCpus", 1))
-        desired_sites_raw = job.get("DESIRED_Sites", "")
-        desired_sites = ",".join(sorted(
-            s.strip() for s in desired_sites_raw.split(",") if s.strip()
-        )) if desired_sites_raw else ""
+        desired_sites = ",".join(sorted(desired_sites_list)) if desired_sites_list else ""
         cfg_key = "||".join([walltime, memory, req_cpus,
                              desired_sites, schedd_name])
         dbg = _ensure(view["workflows"], request, subtask,
                       "_debug", cfg_key)
-        for k in _zero_counts():
-            dbg.setdefault(k, 0)
+        _ensure_counts(dbg)
         _add_counts(dbg, status, cpus)
         if "Schedd" not in dbg:
             dbg["Schedd"] = schedd_name
@@ -413,39 +522,34 @@ class State:
         # per-site totals (running)
         if site and status == 2:
             s = _ensure(view["sites"], site)
-            for k in _zero_counts():
-                s.setdefault(k, 0)
+            _ensure_counts(s)
             _add_counts(s, status, cpus)
 
-        # per-site idle pressure (matching idle per desired site)
-        if status == 1 and desired:
-            sites_list = [s.strip() for s in desired.split(",")]
-            unique = len(sites_list) == 1
-            for s in sites_list:
-                sv = _ensure(view["sites"], s)
-                for k in _zero_counts():
-                    sv.setdefault(k, 0)
-                sv["MatchingIdle"] += 1
-                sv["CpusPending"] += cpus
-                sv.setdefault("UniquePressure", 0)
-                if unique:
-                    sv["UniquePressure"] += 1
+        # per-site idle pressure (matching idle per desired site).
+        # Batched: see _sites_idle merge in update().
+        if status == 1 and desired_sites_list:
+            sites_idle = view["_sites_idle"]
+            for s in desired_sites_list:
+                b = sites_idle.get(s)
+                if b is None:
+                    b = [0, 0, 0]
+                    sites_idle[s] = b
+                b[0] += 1
+                b[1] += cpus
+                if unique_site:
+                    b[2] += 1
 
         # per-schedd totals
         sd = _ensure(view["schedds"], schedd_name)
-        for k in _zero_counts():
-            sd.setdefault(k, 0)
+        _ensure_counts(sd)
         _add_counts(sd, status, cpus)
 
         # priority block
         p = _ensure(view["priorities"], prio)
-        for k, v in _zero_counts().items():
-            p.setdefault(k, 0)
+        _ensure_counts(p)
         _add_counts(p, status, cpus)
         # Track unique-site idle per priority block
-        if status == 1 and desired:
-            unique_site = len([s for s in desired.split(",")
-                               if s.strip()]) == 1
+        if status == 1 and desired_sites_list:
             if unique_site:
                 p.setdefault("UniqueIdle", 0)
                 p.setdefault("UniqueCpusPend", 0)
@@ -471,31 +575,27 @@ class State:
                                 schedd_name):
         request = job.get("CRAB_ReqName", "unknown")
         site = job.get("MATCH_GLIDEIN_CMSSite")
-        desired = job.get("DESIRED_Sites")
+        desired_sites_list = job.get("_desired_sites_list", ())
+        unique_site = job.get("_desired_unique", False)
 
         # workflows[user/request]["Summary"]
         wf_key = f"{user}/{request}"
         st = _ensure(view["workflows"], wf_key, "Summary")
-        for k, v in _zero_counts().items():
-            st.setdefault(k, 0)
+        _ensure_counts(st)
         _add_counts(st, status, cpus)
 
         # Per-site
         if site and status == 2:
             ss = _ensure(view["workflows"], wf_key, site)
-            for k, v in _zero_counts().items():
-                ss.setdefault(k, 0)
+            _ensure_counts(ss)
             _add_counts(ss, status, cpus)
 
-        if status == 1 and desired:
-            sites = [s.strip() for s in desired.split(",")]
-            unique = len(sites) == 1
-            for s in sites:
+        if status == 1 and desired_sites_list:
+            for s in desired_sites_list:
                 ss = _ensure(view["workflows"], wf_key, s)
-                for k, v in _zero_counts().items():
-                    ss.setdefault(k, 0)
+                _ensure_counts(ss)
                 _add_counts(ss, status, cpus)
-                if unique:
+                if unique_site:
                     ss.setdefault("UniquePressure", 0)
                     ss["UniquePressure"] += 1
 
@@ -505,35 +605,33 @@ class State:
         # per-site totals (running)
         if site and status == 2:
             s = _ensure(view["sites"], site)
-            for k in _zero_counts():
-                s.setdefault(k, 0)
+            _ensure_counts(s)
             _add_counts(s, status, cpus)
 
-        # per-site idle pressure
-        if status == 1 and desired:
-            sites_list = [s.strip() for s in desired.split(",")]
-            unique_site = len(sites_list) == 1
-            for s in sites_list:
-                sv = _ensure(view["sites"], s)
-                for k in _zero_counts():
-                    sv.setdefault(k, 0)
-                sv["MatchingIdle"] += 1
-                sv["CpusPending"] += cpus
-                sv.setdefault("UniquePressure", 0)
+        # per-site idle pressure — batched, see merge in update()
+        if status == 1 and desired_sites_list:
+            sites_idle = view["_sites_idle"]
+            for s in desired_sites_list:
+                b = sites_idle.get(s)
+                if b is None:
+                    b = [0, 0, 0]
+                    sites_idle[s] = b
+                b[0] += 1
+                b[1] += cpus
                 if unique_site:
-                    sv["UniquePressure"] += 1
+                    b[2] += 1
 
         # per-schedd
         sd = _ensure(view["schedds"], schedd_name)
-        for k, v in _zero_counts().items():
-            sd.setdefault(k, 0)
+        _ensure_counts(sd)
         _add_counts(sd, status, cpus)
 
     def _aggregate_globalview(self, view, job, status, cpus):
         owner = job.get("Owner", "unknown")
         schedd_name = job.get("_schedd", "unknown")
         site = job.get("MATCH_GLIDEIN_CMSSite")
-        desired = job.get("DESIRED_Sites")
+        desired_sites_list = job.get("_desired_sites_list", ())
+        unique_site = job.get("_desired_unique", False)
 
         # Tool detection (custom submission frameworks)
         tool_name, tool_task = detect_tool(job)
@@ -601,8 +699,7 @@ class State:
         # Per-site (running only)
         if site and status == 2:
             ss = _ensure(view["users"], owner, task, site)
-            for k, v in _zero_counts().items():
-                ss.setdefault(k, 0)
+            _ensure_counts(ss)
             _add_counts(ss, status, cpus)
 
         # view totals (idle + running only, matching other views)
@@ -612,23 +709,24 @@ class State:
         # per-site totals (running)
         if site and status == 2:
             s = _ensure(view["sites"], site)
-            for k in _zero_counts():
-                s.setdefault(k, 0)
+            _ensure_counts(s)
             _add_counts(s, status, cpus)
 
-        # per-site idle pressure
-        if status == 1 and desired:
-            sites_list = [s.strip() for s in desired.split(",")]
-            unique_site = len(sites_list) == 1
-            for s in sites_list:
-                sv = _ensure(view["sites"], s)
-                for k in _zero_counts():
-                    sv.setdefault(k, 0)
-                sv["MatchingIdle"] += 1
-                sv["CpusPending"] += cpus
-                sv.setdefault("UniquePressure", 0)
+        # per-site idle pressure — accumulate into a transient list
+        # bucket per site; merged into view["sites"] after the for-job
+        # loop. Replaces an _ensure + _ensure_counts + setdefault per
+        # site per idle job (~80M calls/cycle) with three int adds.
+        if status == 1 and desired_sites_list:
+            sites_idle = view["_sites_idle"]
+            for s in desired_sites_list:
+                b = sites_idle.get(s)
+                if b is None:
+                    b = [0, 0, 0]
+                    sites_idle[s] = b
+                b[0] += 1
+                b[1] += cpus
                 if unique_site:
-                    sv["UniquePressure"] += 1
+                    b[2] += 1
 
         # per-schedd
         sd = _ensure(view["schedds"], schedd_name)
@@ -647,8 +745,7 @@ class State:
         category = acct_group.split(".")[0] if acct_group else "other"
         if status in (1, 2):
             fs = _ensure(view["fairshare"], category)
-            for k in _zero_counts():
-                fs.setdefault(k, 0)
+            _ensure_counts(fs)
             _add_counts(fs, status, cpus)
 
         # per-user accounting groups (count jobs per category)
@@ -659,8 +756,7 @@ class State:
         # per-user per-group resource counts (idle + running)
         if status in (1, 2):
             gs = _ensure(view["users"], owner, "_group_stats", category)
-            for k in _zero_counts():
-                gs.setdefault(k, 0)
+            _ensure_counts(gs)
             _add_counts(gs, status, cpus)
 
         # UserSummary from scheduler-universe jobs (JobUniverse == 7)
@@ -859,6 +955,13 @@ class State:
                 bucket.setdefault(minute, {})
                 bucket[minute].setdefault(code_str, 0)
                 bucket[minute][code_str] += 1
+                # Per-subtask breakdown for the Subtasks table.
+                subtask = job.get("WMAgent_SubTaskName") or request
+                st_bucket = _ensure(self.exit_codes_by_subtask,
+                                    request, subtask)
+                st_bucket.setdefault(minute, {})
+                st_bucket[minute].setdefault(code_str, 0)
+                st_bucket[minute][code_str] += 1
                 site_bucket = _ensure(self.exit_codes_by_site,
                                       "prodview", request, site)
                 site_bucket.setdefault(minute, {})
@@ -1067,6 +1170,22 @@ class State:
                     dead_wfs.append(wf)
             for wf in dead_wfs:
                 del workflows[wf]
+        # Prune per-subtask exit code buckets (prodview)
+        dead_reqs = []
+        for req, subtasks in self.exit_codes_by_subtask.items():
+            dead_sts = []
+            for st, buckets in subtasks.items():
+                dead = [ts for ts in buckets if ts < cutoff]
+                for ts in dead:
+                    del buckets[ts]
+                if not buckets:
+                    dead_sts.append(st)
+            for st in dead_sts:
+                del subtasks[st]
+            if not subtasks:
+                dead_reqs.append(req)
+        for req in dead_reqs:
+            del self.exit_codes_by_subtask[req]
         # Prune per-site exit code buckets
         for view, workflows in self.exit_codes_by_site.items():
             dead_wfs = []
@@ -1514,12 +1633,13 @@ class State:
                         "lt_running_eff": lt_re,
                         "lt_processing_eff": lt_pe,
                     }
+                wf_w1h = wf_windows.get("1h", {})
                 _atomic_json(os.path.join(wf_dir, "exit_codes.json"), {
                     "updated": self.updated,
-                    "codes": w1h.get("codes", {}),
-                    "total": w1h.get("total", 0),
-                    "failures": w1h.get("failures", 0),
-                    "failure_rate": w1h.get("failure_rate", 0),
+                    "codes": wf_w1h.get("codes", {}),
+                    "total": wf_w1h.get("total", 0),
+                    "failures": wf_w1h.get("failures", 0),
+                    "failure_rate": wf_w1h.get("failure_rate", 0),
                     "windows": wf_windows,
                     "sites": wf_sites_ec,
                     "efficiency": wf_eff,
@@ -2294,6 +2414,38 @@ class State:
                             "prio": min_prio,
                             "blocks": jobs_by_block,
                         }
+
+            # Enrich with per-subtask completion windows (prodview)
+            if view == "prodview":
+                now_b = (int(time.time()) // EXIT_CODE_BUCKET
+                         * EXIT_CODE_BUCKET)
+                for req, st_data in self.exit_codes_by_subtask.items():
+                    if req not in wf_out:
+                        continue
+                    for st_name, buckets in st_data.items():
+                        if st_name not in wf_out[req]:
+                            continue
+                        wins = {}
+                        for wlabel, wsec in EXIT_CODE_WINDOWS.items():
+                            cutoff = now_b - wsec
+                            wcodes = {}
+                            for ts, tcodes in buckets.items():
+                                if ts < cutoff:
+                                    continue
+                                for code, cnt in tcodes.items():
+                                    wcodes[code] = wcodes.get(code, 0) + cnt
+                            wtotal = sum(wcodes.values())
+                            wfail = sum(v for k, v in wcodes.items()
+                                        if k != "0")
+                            if wtotal:
+                                wins[wlabel] = {
+                                    "total": wtotal,
+                                    "failures": wfail,
+                                    "failure_rate": (round(wfail / wtotal, 4)
+                                                     if wtotal else 0),
+                                }
+                        if wins:
+                            wf_out[req][st_name]["_completion"] = wins
 
             _atomic_json(os.path.join(basedir, "totals.json"), {
                 "updated": self.updated,

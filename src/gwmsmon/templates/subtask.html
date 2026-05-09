@@ -13,8 +13,141 @@
   {{ subtask }}
 </h1>
 
-<h2>Job Configuration Breakdown</h2>
+{% if st_summary %}
+<div class="stats-row">
+  <div class="stat"><div class="stat-value">{{ st_summary.get('Running', 0)|fmt }}</div><div class="stat-label">Running</div></div>
+  <div class="stat"><div class="stat-value">{{ st_summary.get('MatchingIdle', 0)|fmt }}</div><div class="stat-label">Idle</div></div>
+  <div class="stat"><div class="stat-value">{{ st_summary.get('Held', 0)|fmt }}</div><div class="stat-label">Held</div></div>
+  <div class="stat"><div class="stat-value">{{ st_summary.get('CpusInUse', 0)|fmt }}</div><div class="stat-label">CPUs In Use</div></div>
+  <div class="stat"><div class="stat-value">{{ st_summary.get('CpusPending', 0)|fmt }}</div><div class="stat-label">CPUs Pending</div></div>
+</div>
+{% endif %}
+
+{% if exit_codes and exit_codes.get('total', 0) %}
+<div class="graphs-row">
+  <div class="chart" data-src="/{{ view }}/json/{{ name }}/{{ subtask }}/completion_histogram.json" data-chart-type="histogram"></div>
+</div>
+{% endif %}
+
+{% set wins = exit_codes.get('windows', {}) if exit_codes else {} %}
+{% set any_completions = wins.get('1h', {}).get('total', 0) > 0 or wins.get('24h', {}).get('total', 0) > 0 or wins.get('7d', {}).get('total', 0) > 0 %}
+{% if any_completions %}
+<details class="section" open data-section="{{ view }}_subtask_exitcodes">
+  <summary><h2>Completion Summary</h2></summary>
+  {% set eff = exit_codes.get('efficiency', {}) %}
+  {% set lt_eff = exit_codes.get('lifetime_efficiency') %}
+  <table class="data-table compact req-table">
+    <thead><tr>
+      <th>Window</th>
+      <th data-sort="num">Completed</th>
+      <th data-sort="num">Failed</th>
+      <th data-sort="num">Failure Rate</th>
+      <th data-sort="num">CPU Eff</th>
+      <th data-sort="num">Proc Eff</th>
+      <th data-sort="num">CPU Hours</th>
+    </tr></thead>
+    <tbody>
+    {% for wlabel in ['1h', '24h', '7d'] %}
+    {% set w = wins.get(wlabel, {}) %}
+    {% set we = eff.get(wlabel, {}) %}
+    {% if w.get('total', 0) > 0 %}
+    <tr>
+      <td>{{ wlabel }}</td>
+      <td>{{ w.total|fmt }}</td>
+      <td>{{ w.failures|fmt }}</td>
+      <td class="{% if w.failure_rate > 0.05 %}warn{% endif %}">{{ (w.failure_rate * 100)|round(1) }}%</td>
+      <td class="{% if we.get('running_eff', 0) and we.running_eff < 0.5 %}warn{% endif %}">{{ (we.get('running_eff', 0) * 100)|round(1) }}%</td>
+      <td class="{% if we.get('processing_eff', 0) and we.processing_eff < 0.8 %}warn{% endif %}">{{ (we.get('processing_eff', 0) * 100)|round(1) }}%</td>
+      <td>{{ we.get('cpu_hours', 0)|fmt }}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    {% if lt_eff %}
+    <tr style="font-weight:600">
+      <td>lifetime</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td class="{% if lt_eff.running_eff < 0.5 %}warn{% endif %}">{{ (lt_eff.running_eff * 100)|round(1) }}%</td>
+      <td class="{% if lt_eff.processing_eff < 0.8 %}warn{% endif %}">{{ (lt_eff.processing_eff * 100)|round(1) }}%</td>
+      <td>{{ lt_eff.cpu_hours|fmt }}</td>
+    </tr>
+    {% endif %}
+    </tbody>
+  </table>
+
+  {% set ann7d = wins.get('7d', {}).get('annotated') %}
+  {% if ann7d %}
+  <h3 style="margin:12px 0 6px;font-size:13px;color:var(--text-th)">Exit Codes (last 7 days)</h3>
+  <table class="data-table compact sortable" data-sort-default="2:desc">
+    <thead><tr>
+      <th data-sort="num">Exit Code</th>
+      <th>Description</th>
+      <th data-sort="num">Count</th>
+    </tr></thead>
+    <tbody>
+    {% for entry in ann7d %}
+    {% if entry.code != '0' %}
+    <tr>
+      <td><a href="/{{ view }}/exitcode/{{ entry.code }}">{{ entry.code }}</a></td>
+      <td>{{ entry.desc }}</td>
+      <td>{{ entry.count|fmt }}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</details>
+{% endif %}
+
+{% if st_sites %}
+<details class="section" open data-section="{{ view }}_subtask_sites">
+  <summary><h2>Sites ({{ st_sites|length }})</h2></summary>
+  <div class="table-scroll">
+  <table class="data-table sortable req-table" data-sort-default="3:desc">
+    <thead>
+      <tr>
+        <th>Site</th>
+        <th data-sort="num">Running</th>
+        <th data-sort="num">Idle</th>
+        <th data-sort="num">CPUs Use</th>
+        <th data-sort="num">CPUs Pend</th>
+        <th data-sort="num">Done (1h)</th>
+        <th data-sort="num">Fail (1h)</th>
+        <th data-sort="num">Fail % (1h)</th>
+        <th data-sort="num">Done (7d)</th>
+        <th data-sort="num">Fail (7d)</th>
+        <th data-sort="num">Fail % (7d)</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for sname, sdata in st_sites %}
+    {% set sec = site_exit_codes.get(sname, {}).get('1h', {}) %}
+    {% set sec7 = site_exit_codes.get(sname, {}).get('7d', {}) %}
+    <tr>
+      <td><a href="/{{ view }}/site/{{ sname }}">{{ sname }}</a></td>
+      <td>{{ sdata.get('Running', 0)|fmt }}</td>
+      <td>{{ sdata.get('MatchingIdle', 0)|fmt }}</td>
+      <td>{{ sdata.get('CpusInUse', 0)|fmt }}</td>
+      <td>{{ sdata.get('CpusPending', 0)|fmt }}</td>
+      <td>{{ sec.get('total', 0)|fmt }}</td>
+      <td>{{ sec.get('failures', 0)|fmt }}</td>
+      <td class="{% if sec.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{{ (sec.get('failure_rate', 0) * 100)|round(1) }}%</td>
+      <td>{{ sec7.get('total', 0)|fmt }}</td>
+      <td>{{ sec7.get('failures', 0)|fmt }}</td>
+      <td class="{% if sec7.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{{ (sec7.get('failure_rate', 0) * 100)|round(1) }}%</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endif %}
+
 {% if debug_info %}
+<details class="section" data-section="{{ view }}_subtask_debug">
+  <summary><h2>Job Configuration Breakdown</h2></summary>
 <div class="table-scroll">
 <table class="data-table sortable" id="debug-table" data-sort-default="4:desc">
   <thead><tr>
@@ -41,7 +174,6 @@
   </tbody>
 </table>
 </div>
-{% else %}
-<p>No debug data available yet. Data will appear after the next collector cycle.</p>
+</details>
 {% endif %}
 {% endblock %}

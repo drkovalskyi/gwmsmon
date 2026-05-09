@@ -164,12 +164,37 @@ def query_schedd(schedd_ad, projection=None):
     return jobs, (t1 - t0), (t2 - t1)
 
 
+_libc = None
+
+
+def _worker_malloc_trim():
+    """Call malloc_trim(0) in the worker to release freed pages back
+    to the OS. Reduces worker RSS between successive schedd queries
+    in the same long-lived ProcessPoolExecutor worker."""
+    global _libc
+    if _libc is None:
+        try:
+            import ctypes
+            _libc = ctypes.CDLL("libc.so.6", use_errno=True)
+            _libc.malloc_trim.argtypes = [ctypes.c_size_t]
+            _libc.malloc_trim.restype = ctypes.c_int
+        except Exception:
+            _libc = False
+    if _libc:
+        try:
+            _libc.malloc_trim(0)
+        except Exception:
+            pass
+
+
 def _worker_query_schedd(name, my_address, stype, projection):
     """Run in subprocess: build a synthetic schedd ad from name +
     MyAddress, query it, convert all jobs to plain dicts, and return.
 
-    Subprocess sidesteps the GIL/binding-lock contention that limits
-    threaded parallelism to ~1.5× regardless of worker count.
+    The htcondor binding accumulates C++ memory across successive
+    schedd.query() calls in a single process. malloc_trim releases
+    glibc-held free pages back to the OS so worker RSS doesn't grow
+    monotonically across the cycle's tasks.
     """
     ad = classad.ClassAd()
     ad["MyAddress"] = my_address
@@ -187,6 +212,7 @@ def _worker_query_schedd(name, my_address, stype, projection):
     t2 = time.perf_counter()
     del raw
     gc.collect()
+    _worker_malloc_trim()
     return jobs, (t1 - t0), (t2 - t1), name
 
 

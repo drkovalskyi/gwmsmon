@@ -246,10 +246,14 @@
         <th data-sort="num">Idle</th>
         <th data-sort="num">CPUs Use</th>
         <th data-sort="num">CPUs Pend</th>
+        <th data-sort="num">Done (7d)</th>
+        <th data-sort="num">Fail (7d)</th>
+        <th data-sort="num">Fail % (7d)</th>
       </tr>
     </thead>
     <tbody>
     {% for st_name, st_data in subtasks.items() if not st_name.startswith('_') %}
+    {% set comp7 = st_data.get('_completion', {}).get('7d', {}) %}
     <tr>
       {% set short_st = st_name.replace('/' + name + '/', '') if ('/' + name + '/') in st_name else st_name %}
       <td title="{{ st_name }}"><a href="/{{ view }}/request/{{ name }}/subtask/{{ short_st }}">{{ short_st }}</a></td>
@@ -258,6 +262,9 @@
       <td>{{ st_data.get('MatchingIdle', 0)|fmt }}</td>
       <td>{{ st_data.get('CpusInUse', 0)|fmt }}</td>
       <td>{{ st_data.get('CpusPending', 0)|fmt }}</td>
+      <td>{{ comp7.get('total', 0)|fmt }}</td>
+      <td>{{ comp7.get('failures', 0)|fmt }}</td>
+      <td class="{% if comp7.get('failure_rate', 0) > 0.05 %}warn{% endif %}">{% if comp7.get('total') %}{{ (comp7.get('failure_rate', 0) * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     </tbody>

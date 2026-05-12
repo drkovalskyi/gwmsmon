@@ -116,3 +116,39 @@ def test_fast_path_handles_large_scalar_dict():
     big_s = {f"k{i}": str(i) for i in range(10_000)}
     out_s = convert_ad(big_s, projection=list(big_s.keys()))
     assert out_s == big_s
+
+
+def test_classad_types_checked_before_scalar_fast_path():
+    """Boost.Python's enum/expression types can inherit from str/int.
+    isinstance(v, str) returning True for an ExprTree previously bypassed
+    the recursive walker, leaking unconverted classad objects into JSON
+    output. Simulate that inheritance and ensure conversion still fires."""
+
+    # Mimic Boost.Python: ExprTree subtype that ALSO inherits from str.
+    # __new__ stores eval_value and the repr; __init__ is a no-op so we
+    # don't trip the stub ExprTree's signature.
+    class StrLikeExprTree(classad.ExprTree, str):
+        def __new__(cls, eval_value, repr_str):
+            obj = str.__new__(cls, repr_str)
+            obj._eval_value = eval_value
+            return obj
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    class IntLikeValue(classad.Value, int):
+        def __new__(cls, val=0):
+            return int.__new__(cls, val)
+
+    expr = StrLikeExprTree("real_value", "raw expr")
+    # Scalar fast path would return the expr (str subclass) unchanged.
+    # Correct behaviour: treat it as ExprTree, eval, return "real_value".
+    assert classad_to_python(expr) == "real_value"
+
+    val = IntLikeValue(0)
+    # Scalar fast path would return 0 (int). Correct: classad.Value -> None.
+    assert classad_to_python(val) is None
+
+    ad = {"DESIRED_Sites": expr, "JobStatus": 2}
+    out = convert_ad(ad, projection=["DESIRED_Sites", "JobStatus"])
+    assert out == {"DESIRED_Sites": "real_value", "JobStatus": 2}

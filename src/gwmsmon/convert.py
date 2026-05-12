@@ -18,12 +18,12 @@ _SCALAR_TYPES = (int, str, float, bool, type(None))
 def classad_to_python(value):
     """Recursively convert a classad value to a plain Python type.
 
-    Hot path first: scalar (str/int/float/bool/None) — pass through.
-    Slow path: ExprTree / Value / list / dict / fallback.
+    Classad types must be checked BEFORE the scalar fast path:
+    classad.ExprTree and classad.Value can inherit from str/int via
+    Boost.Python, so isinstance(v, _SCALAR_TYPES) returns True and the
+    fast path would store the unconverted classad object — which then
+    fails JSON serialization downstream.
     """
-    if isinstance(value, _SCALAR_TYPES):
-        return value
-
     if _HAS_CLASSAD:
         if isinstance(value, classad.ExprTree):
             try:
@@ -31,9 +31,11 @@ def classad_to_python(value):
             except Exception:
                 return None
             return classad_to_python(evaluated)
-
         if isinstance(value, classad.Value):
             return None
+
+    if isinstance(value, _SCALAR_TYPES):
+        return value
 
     if isinstance(value, list):
         return [classad_to_python(item) for item in value]
@@ -47,9 +49,9 @@ def classad_to_python(value):
 def convert_ad(ad, projection=None):
     """Convert a classad to a plain Python dict.
 
-    Fast path: most fields are scalars (already native Python). Skip
-    the recursive walker for those — only call classad_to_python for
-    ExprTree/list/dict.
+    Most fields are scalars (already native Python) — pass through.
+    Classad types (ExprTree, Value) inherit from scalars via Boost.Python,
+    so we check those first to keep them off the fast path.
 
     If projection is given, only include those keys.
     """
@@ -60,7 +62,9 @@ def convert_ad(ad, projection=None):
             v = ad[key]
         except KeyError:
             continue
-        if isinstance(v, _SCALAR_TYPES):
+        if _HAS_CLASSAD and isinstance(v, (classad.ExprTree, classad.Value)):
+            result[key] = classad_to_python(v)
+        elif isinstance(v, _SCALAR_TYPES):
             result[key] = v
         else:
             result[key] = classad_to_python(v)

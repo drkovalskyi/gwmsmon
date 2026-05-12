@@ -6,8 +6,15 @@ Three retention tiers:
   1y   — 1-week bins   (52 points)
 
 Each data point stores the average of all samples that fell into its bin.
+
+Also keeps a rolling per-cycle RSS window for memory-leak detection
+on /status. Linear regression of RSS over the last N cycles gives a
+slope (MB/cycle); drift > a threshold means the parent's RSS isn't
+stabilising — typical of a Python-allocator fragmentation regression
+or a real reference leak.
 """
 
+import collections
 import json
 import logging
 import os
@@ -25,6 +32,12 @@ TIERS = [
 
 METRICS = ("cycle_time", "rss_mb", "state_size_mb")
 
+# Memory-leak detector window: last 100 cycles (~5h at current rate).
+LEAK_WINDOW_CYCLES = 100
+# Slope thresholds in MB/cycle for the verdict.
+LEAK_DRIFT_THRESHOLD = 5.0
+LEAK_HARD_THRESHOLD = 50.0
+
 
 class StatusHistory:
     """Accumulates service metrics into multi-tier binned time-series."""
@@ -37,9 +50,17 @@ class StatusHistory:
         self._accum = {m: {t[0]: [] for t in TIERS} for m in METRICS}
         # Current bin start: {metric: {tier_name: timestamp}}
         self._bin_start = {m: {t[0]: 0 for t in TIERS} for m in METRICS}
+        # Rolling per-cycle RSS window for leak detection.
+        # Items: (cycle_num, rss_mb).
+        self.rss_window = collections.deque(maxlen=LEAK_WINDOW_CYCLES)
 
-    def record(self, cycle_time, rss_mb, state_size_mb):
-        """Record a sample. Called once per collector cycle."""
+    def record(self, cycle_time, rss_mb, state_size_mb, cycle=None):
+        """Record a sample. Called once per collector cycle.
+
+        cycle: cycle number (used for leak-detection regression). If
+        omitted the rolling window uses 0 — leak detection becomes
+        time-based instead of cycle-based.
+        """
         now = time.time()
         values = {
             "cycle_time": cycle_time,
@@ -54,6 +75,48 @@ class StatusHistory:
                     self._flush_bin(metric, name)
                     self._bin_start[metric][name] = bin_start
                 self._accum[metric][name].append(values[metric])
+
+        # Per-cycle RSS sample for the leak detector.
+        if cycle is None:
+            cycle = (self.rss_window[-1][0] + 1) if self.rss_window else 0
+        self.rss_window.append((cycle, rss_mb))
+
+    def leak_report(self):
+        """Linear regression of RSS over the rolling window.
+
+        Returns dict: {n, slope_mb_per_cycle, first_rss, last_rss,
+        verdict in ("stable", "drift", "leak")}.
+        """
+        n = len(self.rss_window)
+        if n < 5:
+            return {
+                "n": n, "slope_mb_per_cycle": 0.0,
+                "first_rss": 0, "last_rss": 0, "verdict": "warmup",
+                "window": LEAK_WINDOW_CYCLES,
+            }
+        xs = [p[0] for p in self.rss_window]
+        ys = [p[1] for p in self.rss_window]
+        mx = sum(xs) / n
+        my = sum(ys) / n
+        num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        den = sum((x - mx) ** 2 for x in xs)
+        slope = (num / den) if den else 0.0
+        if abs(slope) < LEAK_DRIFT_THRESHOLD:
+            verdict = "stable"
+        elif slope < LEAK_HARD_THRESHOLD:
+            verdict = "drift"
+        else:
+            verdict = "leak"
+        return {
+            "n": n,
+            "slope_mb_per_cycle": round(slope, 2),
+            "first_rss": round(ys[0]),
+            "last_rss": round(ys[-1]),
+            "verdict": verdict,
+            "window": LEAK_WINDOW_CYCLES,
+            "drift_threshold": LEAK_DRIFT_THRESHOLD,
+            "leak_threshold": LEAK_HARD_THRESHOLD,
+        }
 
     def _flush_bin(self, metric, tier_name):
         """Average the accumulator and append to the series."""

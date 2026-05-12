@@ -17,6 +17,27 @@
   <tr><td style="font-weight:600">Lifetime Efficiency Entries</td><td>{{ status.get('efficiency_lifetime', 0)|fmt }}</td></tr>
   </tbody>
 </table>
+
+{% set leak = status.get('leak') %}
+{% if leak %}
+{% set v = leak.get('verdict', 'warmup') %}
+{% set color = {'stable':'#2ca02c','drift':'#ff9800','leak':'#d62728','warmup':'#888'}[v] %}
+<h2 style="margin-top:18px">Memory Leak Detector</h2>
+<table class="data-table compact" style="max-width:480px">
+  <tbody>
+  <tr><td style="font-weight:600">Verdict</td>
+      <td><span style="font-weight:600;color:{{ color }}">{{ v|upper }}</span></td></tr>
+  <tr><td style="font-weight:600">Slope</td>
+      <td>{{ leak.slope_mb_per_cycle }} MB/cycle</td></tr>
+  <tr><td style="font-weight:600">Window</td>
+      <td>last {{ leak.n }} of {{ leak.window }} cycles</td></tr>
+  <tr><td style="font-weight:600">RSS</td>
+      <td>{{ leak.first_rss }} MB → {{ leak.last_rss }} MB</td></tr>
+  <tr><td style="font-weight:600">Thresholds</td>
+      <td>stable &lt; {{ leak.drift_threshold }}, drift &lt; {{ leak.leak_threshold }} MB/cycle</td></tr>
+  </tbody>
+</table>
+{% endif %}
 {% else %}
 <p>No status data available yet.</p>
 {% endif %}

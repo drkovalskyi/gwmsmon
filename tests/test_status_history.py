@@ -131,3 +131,46 @@ def test_atomic_write_no_partial_files(freeze_time, tmp_path):
     h.flush(str(tmp_path))
     leftover = [n for n in os.listdir(str(tmp_path)) if n.endswith(".tmp")]
     assert leftover == []
+
+
+def test_leak_report_warmup(freeze_time):
+    h = StatusHistory()
+    freeze_time(1_700_000_000.0)
+    for c in range(3):
+        h.record(50, 4000, 5, cycle=c)
+    rep = h.leak_report()
+    assert rep["verdict"] == "warmup"
+    assert rep["n"] == 3
+
+
+def test_leak_report_stable(freeze_time):
+    h = StatusHistory()
+    freeze_time(1_700_000_000.0)
+    # RSS hovering around 4500 MB — no slope
+    for c in range(40):
+        h.record(50, 4500 + (c % 5), 5, cycle=c)
+    rep = h.leak_report()
+    assert rep["verdict"] == "stable"
+    assert abs(rep["slope_mb_per_cycle"]) < 1
+
+
+def test_leak_report_leak(freeze_time):
+    h = StatusHistory()
+    freeze_time(1_700_000_000.0)
+    # RSS climbs 100 MB per cycle — clear leak
+    for c in range(20):
+        h.record(50, 4000 + 100 * c, 5, cycle=c)
+    rep = h.leak_report()
+    assert rep["verdict"] == "leak"
+    assert 95 < rep["slope_mb_per_cycle"] < 105
+
+
+def test_leak_report_drift(freeze_time):
+    h = StatusHistory()
+    freeze_time(1_700_000_000.0)
+    # 20 MB/cycle — between drift and leak
+    for c in range(20):
+        h.record(50, 4000 + 20 * c, 5, cycle=c)
+    rep = h.leak_report()
+    assert rep["verdict"] == "drift"
+    assert 18 < rep["slope_mb_per_cycle"] < 22

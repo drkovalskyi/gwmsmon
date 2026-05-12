@@ -132,6 +132,36 @@ def test_held_jobs_excluded_from_prodview_running():
                 assert summary.get("Running", 0) == 0
 
 
+def test_desired_sites_as_list():
+    """DESIRED_Sites can come from the classad as either a comma-string
+    or a Python list (after classad_to_python). Either shape must be
+    accepted by the aggregator without crashing, and produce the same
+    site-pressure routing."""
+    jobs_str = [
+        _job(WMAgent_RequestName="wf-str", JobStatus=1,
+             DESIRED_Sites="T2_CH_CERN,T2_US_MIT"),
+    ]
+    jobs_list = [
+        _job(WMAgent_RequestName="wf-list", JobStatus=1,
+             DESIRED_Sites=["T2_CH_CERN", "T2_US_MIT"]),
+    ]
+    s = State()
+    s.update(jobs_str + jobs_list, summary_ads={}, factory_data={})
+    sites = s.snapshot["prodview"]["sites"]
+    # Both jobs are idle on the same two sites — pressure for each
+    # site should reflect both jobs.
+    assert sites["T2_CH_CERN"]["MatchingIdle"] == 2
+    assert sites["T2_US_MIT"]["MatchingIdle"] == 2
+    # _metadata DESIRED_Sites must be a string (normalized) regardless
+    # of source shape.
+    wfs = s.snapshot["prodview"]["workflows"]
+    for wf in ("wf-str", "wf-list"):
+        meta = wfs[wf]["_metadata"]
+        assert isinstance(meta["DESIRED_Sites"], str)
+        assert "T2_CH_CERN" in meta["DESIRED_Sites"]
+        assert "T2_US_MIT" in meta["DESIRED_Sites"]
+
+
 def test_non_vanilla_universe_jobs_excluded():
     """Scheduler-universe (7) and local-universe (12) jobs run on the
     AP itself (DAGMan, local helpers) and must not be counted as grid

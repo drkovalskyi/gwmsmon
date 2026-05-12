@@ -51,4 +51,44 @@ def _install_classad_stub():
     sys.modules["classad"] = classad
 
 
+def _install_htcondor_stub():
+    """Stub `htcondor` for tests that import modules touching the
+    binding (e.g., collector). No test exercises a real query — the
+    stubs only need to satisfy module-import-time attribute access."""
+    if "htcondor" in sys.modules:
+        return  # real binding available
+
+    htcondor = types.ModuleType("htcondor")
+
+    class _Schedd:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def query(self, *_a, **_kw):
+            return []
+
+        def history(self, *_a, **_kw):
+            return []
+
+    class _Collector:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def query(self, *_a, **_kw):
+            return []
+
+    class _AdTypes:
+        Schedd = "Schedd"
+        Submitter = "Submitter"
+        Startd = "Startd"
+        Negotiator = "Negotiator"
+        Accounting = "Accounting"
+
+    htcondor.Schedd = _Schedd
+    htcondor.Collector = _Collector
+    htcondor.AdTypes = _AdTypes
+    sys.modules["htcondor"] = htcondor
+
+
 _install_classad_stub()
+_install_htcondor_stub()

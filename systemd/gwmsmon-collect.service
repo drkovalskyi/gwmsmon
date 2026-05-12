@@ -19,6 +19,14 @@ StandardError=journal
 SyslogIdentifier=gwmsmon-collect
 MemoryMax=35G
 TasksMax=128
+# Watchdog: collector must ping WATCHDOG=1 within this window or
+# systemd restarts the service. Catches Pool.map / Process.join hangs
+# (seen 2026-05-11: 22h silent wedge with workers stuck on futex).
+WatchdogSec=600
+NotifyAccess=main
+# Stop quickly if SIGTERM doesn't get a clean exit — escalate to SIGKILL.
+TimeoutStopSec=30
+KillMode=mixed
 PrivateTmp=yes
 ProtectHome=yes
 NoNewPrivileges=yes

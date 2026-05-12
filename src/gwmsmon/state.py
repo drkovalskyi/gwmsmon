@@ -42,6 +42,53 @@ EXIT_CODE_WINDOW = 7 * 86400       # retain 7 days of buckets
 EXIT_CODE_BUCKET = 600              # 10-minute bucket resolution
 EXIT_CODE_WINDOWS = {"1h": 3600, "24h": 86400, "7d": 7 * 86400}
 
+
+def _window_cutoffs(now_site):
+    """Pre-computed (label, cutoff) pairs and global oldest cutoff for
+    single-pass windowed bucket aggregation."""
+    items = [(wl, now_site - wsec) for wl, wsec in EXIT_CODE_WINDOWS.items()]
+    return items, min(c for _, c in items)
+
+
+def _window_codes(buckets, now_site):
+    """Single-pass per-window code aggregation.
+
+    buckets: {ts: {code: count}}
+    Returns {window_label: {code: count}} (one pass over buckets).
+    """
+    cutoffs, oldest = _window_cutoffs(now_site)
+    out = {wl: {} for wl, _ in cutoffs}
+    for ts, codes in buckets.items():
+        if ts < oldest:
+            continue
+        for wl, cutoff in cutoffs:
+            if ts >= cutoff:
+                wcodes = out[wl]
+                for code, cnt in codes.items():
+                    wcodes[code] = wcodes.get(code, 0) + cnt
+    return out
+
+
+def _window_totals(buckets, now_site):
+    """Single-pass per-window (total, failures) tallies.
+
+    Returns {window_label: [total, failures]}.
+    """
+    cutoffs, oldest = _window_cutoffs(now_site)
+    out = {wl: [0, 0] for wl, _ in cutoffs}
+    for ts, codes in buckets.items():
+        if ts < oldest:
+            continue
+        tot = sum(codes.values())
+        fail = tot - codes.get("0", 0)
+        for wl, cutoff in cutoffs:
+            if ts >= cutoff:
+                pair = out[wl]
+                pair[0] += tot
+                pair[1] += fail
+    return out
+
+
 EOS_LOG_BASE = "/eos/cms/store/logs/prod/recent"
 
 _EOS_PREFIXES = [
@@ -118,6 +165,24 @@ _ZERO_KEYS = ("Running", "MatchingIdle", "CpusInUse", "CpusPending")
 _ZERO_TEMPLATE = {k: 0 for k in _ZERO_KEYS}
 
 
+def _parse_desired_sites(value):
+    """Coerce a DESIRED_Sites classad value to a list of site names.
+
+    Both shapes appear in production:
+    - comma-separated string: "T1_DE_KIT,T2_CH_CERN, T2_US_MIT"
+    - Python list: ["T1_DE_KIT", "T2_CH_CERN", "T2_US_MIT"]
+      (a classad list field, already converted by classad_to_python)
+    """
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [s.strip() for s in value.split(",") if s.strip()]
+    if isinstance(value, list):
+        return [s.strip() for s in value
+                if isinstance(s, str) and s.strip()]
+    return []
+
+
 def _zero_counts():
     return _ZERO_TEMPLATE.copy()
 
@@ -166,6 +231,193 @@ def _prio_block(job_prio):
     return "B7"
 
 
+# Job-chunk aggregation workers. Set by State.update() before forking
+# the Pool; children inherit via fork's COW. Each worker processes
+# jobs[start:end] and runs the full per-job pipeline (universe filter,
+# per-schedd task, all 3 view aggregators), returning a partial snap.
+_PARENT_STATE = None  # State instance, set in parent before fork
+_PARENT_JOBS = None   # list of job dicts
+
+
+def _reset_worker_signals():
+    """Reset SIGTERM/SIGINT handlers in a forked worker to SIG_DFL.
+
+    Workers inherit the parent's signal handlers via fork. The parent's
+    SIGTERM handler sets a module-level _shutdown flag the workers
+    never read, and the Python-level handler doesn't interrupt the
+    C-level multiprocessing.connection.recv() workers wait on for new
+    tasks. Net effect: a cgroup SIGTERM logs nicely in each worker but
+    leaves them wedged for hours (incident 2026-05-11, 22h hang).
+    Reverting to SIG_DFL lets the kernel terminate the worker.
+    """
+    import signal
+    try:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+    except (ValueError, OSError):
+        pass  # not main thread; nothing to do
+
+
+# Keys that should NOT be summed during partial-snap merge. They're
+# config attributes captured once per (request, subtask, cfg_key) and
+# happen to be ints, so the generic int+int rule would wrongly sum
+# identical values from different workers.
+_FIRST_ONLY_INT_KEYS = frozenset({"WallTime", "Memory", "Cpus"})
+# Keys whose int value should be merged with min() — used for
+# job-priority tracking ("_min" = lowest priority seen across workers).
+_MIN_INT_KEYS = frozenset({"_min"})
+
+
+def _merge_partial(dst, src):
+    """Recursively merge a partial snap (or sub-tree) into the parent.
+
+    Default rules:
+      dict + dict   -> recurse
+      int  + int    -> sum (or min for "_min", or first-wins for cfg keys)
+      list + list   -> element-wise sum (handles nested int lists)
+      str  + *      -> keep dst (first-wins)
+    """
+    for k, v in src.items():
+        if k not in dst:
+            dst[k] = v
+            continue
+        d = dst[k]
+        if isinstance(v, dict) and isinstance(d, dict):
+            _merge_partial(d, v)
+        elif isinstance(v, int) and isinstance(d, int):
+            if k in _MIN_INT_KEYS:
+                dst[k] = min(d, v)
+            elif k in _FIRST_ONLY_INT_KEYS:
+                pass  # keep first
+            else:
+                dst[k] = d + v
+        elif isinstance(v, list) and isinstance(d, list) and len(v) == len(d):
+            for i in range(len(v)):
+                a, b = d[i], v[i]
+                if isinstance(a, int) and isinstance(b, int):
+                    d[i] = a + b
+                elif isinstance(a, list) and isinstance(b, list):
+                    for j in range(min(len(a), len(b))):
+                        if isinstance(a[j], int) and isinstance(b[j], int):
+                            a[j] = a[j] + b[j]
+        # else: type mismatch or non-mergeable — keep dst as-is
+
+
+def _worker_process_chunk(chunk):
+    """Process jobs[chunk[0]:chunk[1]] in a forked subprocess.
+
+    Replicates the parent's per-job loop in full: universe bucketing,
+    per-schedd task breakdown, DESIRED_Sites parsing, all 3 view
+    aggregators. Returns (partial_snap, univ_counts, site_cpus_cat,
+    counters).
+    """
+    _reset_worker_signals()
+    state = _PARENT_STATE
+    jobs = _PARENT_JOBS
+    snap = state._empty_snapshot()
+    site_cpus_cat = {}
+    univ_counts = {}
+    n_jobs = n_vanilla = n_gv = n_pv = n_av = 0
+    start, end = chunk
+
+    for i in range(start, end):
+        job = jobs[i]
+        n_jobs += 1
+        schedd_name = job.get("_schedd", "unknown")
+        universe = job.get("JobUniverse")
+        status = job.get("JobStatus")
+        if universe == 5:
+            bucket = "vanilla"
+        elif universe == 7:
+            bucket = "scheduler"
+        elif universe == 12:
+            bucket = "local"
+        else:
+            bucket = "other"
+        sd_uc = univ_counts.setdefault(
+            schedd_name,
+            {"vanilla": [0, 0, 0], "scheduler": [0, 0, 0],
+             "local": [0, 0, 0], "other": [0, 0, 0]})
+        if status == 2:
+            sd_uc[bucket][0] += 1
+        elif status == 1:
+            sd_uc[bucket][1] += 1
+        elif status == 5:
+            sd_uc[bucket][2] += 1
+        if universe != 5:
+            continue
+        n_vanilla += 1
+        cpus = job.get("RequestCpus", 1) or 1
+        schedd_type = job.get("_schedd_type", "unknown")
+
+        ds_list = _parse_desired_sites(job.get("DESIRED_Sites"))
+        job["_desired_sites_list"] = ds_list
+        job["_desired_unique"] = (len(ds_list) == 1)
+
+        owner = job.get("Owner", "unknown")
+        dagman_id = job.get("DAGManJobId")
+        condora_req = job.get("CONDORA_RequestName")
+        sched_task = (job.get("CRAB_ReqName")
+                      or job.get("WMAgent_RequestName")
+                      or condora_req
+                      or (f"{schedd_name}#{dagman_id}"
+                          if dagman_id else None)
+                      or job.get("SubmitFile")
+                      or "unknown")
+        condora_round = job.get("CONDORA_Round")
+        if condora_req and condora_round is not None:
+            sched_task = f"{sched_task}/{condora_round}"
+        sd_task = _ensure(snap["poolview"], "schedds",
+                          schedd_name, "_tasks", sched_task)
+        sd_task.setdefault("Owner", owner)
+        for k in ("Running", "MatchingIdle", "Held",
+                  "CpusInUse", "CpusPending"):
+            sd_task.setdefault(k, 0)
+        if status == 2:
+            sd_task["Running"] += 1
+            sd_task["CpusInUse"] += cpus
+        elif status == 1:
+            sd_task["MatchingIdle"] += 1
+            sd_task["CpusPending"] += cpus
+        elif status == 5:
+            sd_task["Held"] += 1
+
+        state._aggregate_globalview(snap["globalview"], job, status, cpus)
+        n_gv += 1
+
+        if status not in (1, 2):
+            continue
+
+        if status == 2:
+            site = job.get("MATCH_GLIDEIN_CMSSite")
+            if site:
+                acct = job.get("AcctGroup", "") or ""
+                sc = site_cpus_cat.setdefault(
+                    site, {"tier0": 0, "production": 0,
+                           "analysis": 0, "other": 0})
+                if acct in ("tier0", "production", "analysis"):
+                    sc[acct] += cpus
+                else:
+                    sc["other"] += cpus
+
+        request = job.get("WMAgent_RequestName")
+        if request:
+            state._aggregate_prodview(snap["prodview"], job, status,
+                                      cpus, request, schedd_name)
+            n_pv += 1
+
+        if schedd_type == "crabschedd":
+            user = job.get("CRAB_UserHN")
+            if user:
+                state._aggregate_analysisview(
+                    snap["analysisview"], job, status, cpus,
+                    user, schedd_name)
+                n_av += 1
+
+    return (snap, univ_counts, site_cpus_cat,
+            n_jobs, n_vanilla, n_gv, n_pv, n_av)
+
+
 class State:
     def __init__(self):
         self.snapshot = {}
@@ -182,6 +434,15 @@ class State:
         self.efficiency_by_site = {} # {view: {wf: {site: {ts: {cpu, wall_cpus, slot_ok, slot_all}}}}}
         self.efficiency_lifetime = {} # {wf: {cpu, wall_cpus, slot_ok, slot_all}}
         self.history_watermarks = {} # {schedd_name: timestamp}
+        # Per-view set of workflows touched since last flush_exit_codes.
+        # Empty after a successful flush. Used to skip rewriting per-wf
+        # JSON files for workflows that didn't gain completions and whose
+        # window cutoffs haven't shifted.
+        self._dirty_wfs = {v: set() for v in
+                           ("prodview", "analysisview", "globalview")}
+        # now_site at the previous flush. When unchanged across cycles,
+        # window cutoffs are identical and only dirty wfs need rewrite.
+        self._last_flush_now_site = 0
 
     def update(self, jobs, summary_ads, factory_data, accounting_ads=None):
         """Rebuild snapshot from fresh data.
@@ -215,126 +476,58 @@ class State:
         n_prodview = 0
         n_analysisview = 0
 
-        for job in jobs:
-            n_jobs_seen += 1
-            schedd_name = job.get("_schedd", "unknown")
-            universe = job.get("JobUniverse")
-            status = job.get("JobStatus")
-            if universe == 5:
-                bucket = "vanilla"
-            elif universe == 7:
-                bucket = "scheduler"
-            elif universe == 12:
-                bucket = "local"
+        # Run the per-job loop across N forked workers — each handles a
+        # contiguous chunk of jobs and runs the full pipeline (universe
+        # filter, per-schedd task, all 3 view aggregators). Workers
+        # inherit jobs via fork's COW and pickle a partial snap back.
+        n_workers = int(os.environ.get("GWMSMON_AGGREGATE_WORKERS", "8"))
+        n_total = len(jobs)
+        global _PARENT_STATE, _PARENT_JOBS
+        _PARENT_STATE = self
+        _PARENT_JOBS = jobs
+        try:
+            if n_workers > 1 and n_total >= 1000:
+                import multiprocessing as mp
+                chunk = (n_total + n_workers - 1) // n_workers
+                chunks = [(i * chunk, min((i + 1) * chunk, n_total))
+                          for i in range(n_workers)]
+                ctx = mp.get_context("fork")
+                t_aggr = time.time()
+                with ctx.Pool(n_workers) as pool:
+                    results = pool.map(_worker_process_chunk, chunks)
+                t_workers = time.time() - t_aggr
             else:
-                bucket = "other"
-            sd_uc = univ_counts.setdefault(
-                schedd_name,
-                {"vanilla": [0, 0, 0], "scheduler": [0, 0, 0],
-                 "local": [0, 0, 0], "other": [0, 0, 0]})
-            if status == 2:
-                sd_uc[bucket][0] += 1
-            elif status == 1:
-                sd_uc[bucket][1] += 1
-            elif status == 5:
-                sd_uc[bucket][2] += 1
+                # Inline path: tests, small data, or worker count = 1.
+                t_aggr = time.time()
+                results = [_worker_process_chunk((0, n_total))]
+                t_workers = time.time() - t_aggr
+        finally:
+            _PARENT_STATE = None
+            _PARENT_JOBS = None
 
-            # Skip scheduler-universe (7) and local-universe (12) jobs:
-            # DAGMan instances and local AP-side helpers that don't carry
-            # AccountingGroup and aren't part of the grid workload. Only
-            # Vanilla universe (5) is real grid load.
-            if universe != 5:
-                continue
-            n_vanilla += 1
-            cpus = job.get("RequestCpus", 1) or 1
-            schedd_type = job.get("_schedd_type", "unknown")
-
-            # Parse DESIRED_Sites once and stash on the job dict so
-            # the three aggregators read it back instead of each
-            # re-running split+strip. ~270M strip calls / cycle saved.
-            desired = job.get("DESIRED_Sites")
-            if desired:
-                ds_list = [s.strip() for s in desired.split(",")
-                            if s.strip()]
-            else:
-                ds_list = []
-            job["_desired_sites_list"] = ds_list
-            job["_desired_unique"] = (len(ds_list) == 1)
-
-            # --- per-schedd task breakdown for /poolview/schedd/<name>
-            # Same task-key derivation as globalview so users see the
-            # same task identifiers wherever they land.
-            owner = job.get("Owner", "unknown")
-            dagman_id = job.get("DAGManJobId")
-            condora_req = job.get("CONDORA_RequestName")
-            sched_task = (job.get("CRAB_ReqName")
-                          or job.get("WMAgent_RequestName")
-                          or condora_req
-                          or (f"{schedd_name}#{dagman_id}"
-                              if dagman_id else None)
-                          or job.get("SubmitFile")
-                          or "unknown")
-            condora_round = job.get("CONDORA_Round")
-            if condora_req and condora_round is not None:
-                sched_task = f"{sched_task}/{condora_round}"
-            sd_task = _ensure(snap["poolview"], "schedds",
-                              schedd_name, "_tasks", sched_task)
-            sd_task.setdefault("Owner", owner)
-            for k in ("Running", "MatchingIdle", "Held",
-                      "CpusInUse", "CpusPending"):
-                sd_task.setdefault(k, 0)
-            if status == 2:
-                sd_task["Running"] += 1
-                sd_task["CpusInUse"] += cpus
-            elif status == 1:
-                sd_task["MatchingIdle"] += 1
-                sd_task["CpusPending"] += cpus
-            elif status == 5:
-                sd_task["Held"] += 1
-
-            # --- globalview: all jobs, all statuses ---
-            self._aggregate_globalview(snap["globalview"], job, status, cpus)
-            n_globalview += 1
-
-            # Only Idle (1) and Running (2) for prodview/analysisview
-            if status not in (1, 2):
-                continue
-
-            # Track per-site per-category CPUs for running jobs
-            if status == 2:
-                site = job.get("MATCH_GLIDEIN_CMSSite")
-                if site:
-                    acct = job.get("AcctGroup", "") or ""
-                    sc = site_cpus_cat.setdefault(
-                        site, {"tier0": 0, "production": 0,
-                               "analysis": 0, "other": 0})
-                    if acct in ("tier0", "production", "analysis"):
-                        sc[acct] += cpus
-                    else:
-                        sc["other"] += cpus
-
-            # --- prodview: jobs with WMAgent_RequestName ---
-            request = job.get("WMAgent_RequestName")
-            if request:
-                self._aggregate_prodview(snap["prodview"], job, status,
-                                         cpus, request, schedd_name)
-                n_prodview += 1
-
-            # --- analysisview: jobs from crabschedd ---
-            if schedd_type == "crabschedd":
-                user = job.get("CRAB_UserHN")
-                if user:
-                    self._aggregate_analysisview(snap["analysisview"], job,
-                                                 status, cpus, user,
-                                                 schedd_name)
-                    n_analysisview += 1
+        t_merge = time.time()
+        for (partial_snap, w_univ, w_site_cpus,
+             w_n_jobs, w_n_van, w_n_gv, w_n_pv, w_n_av) in results:
+            _merge_partial(snap, partial_snap)
+            _merge_partial(univ_counts, w_univ)
+            _merge_partial(site_cpus_cat, w_site_cpus)
+            n_jobs_seen += w_n_jobs
+            n_vanilla += w_n_van
+            n_globalview += w_n_gv
+            n_prodview += w_n_pv
+            n_analysisview += w_n_av
+        t_merge = time.time() - t_merge
 
         t_loop_end = time.time()
+        actual_workers = (n_workers
+                          if n_workers > 1 and n_total >= 1000 else 1)
         log.info(
-            "update loop: %.1fs over %d jobs (%d vanilla, "
-            "%d globalview, %d prodview, %d analysisview)",
-            t_loop_end - t_loop_start, n_jobs_seen,
-            n_vanilla, n_globalview, n_prodview, n_analysisview)
+            "update loop: %.1fs over %d jobs (%d vanilla, %d gv, %d pv, "
+            "%d av) | workers=%d wall=%.1fs merge=%.1fs",
+            t_loop_end - t_loop_start, n_jobs_seen, n_vanilla,
+            n_globalview, n_prodview, n_analysisview,
+            actual_workers, t_workers, t_merge)
+
         snap["_site_cpus_cat"] = site_cpus_cat
 
         # Merge batched per-view per-site idle pressure into view["sites"].
@@ -468,11 +661,15 @@ class State:
             for attr in ("CMS_JobType", "CMS_RequestType",
                          "CMS_CampaignName", "CMS_Type",
                          "CMSSW_Versions", "OriginalMaxWallTimeMins",
-                         "OriginalMemory", "RequestDisk", "Owner",
-                         "DESIRED_Sites"):
+                         "OriginalMemory", "RequestDisk", "Owner"):
                 val = job.get(attr)
                 if val is not None:
                     req_meta[attr] = val
+            # DESIRED_Sites is normalized to a comma-string regardless
+            # of source shape (string or classad list) so the template
+            # renders it consistently.
+            if desired_sites_list:
+                req_meta["DESIRED_Sites"] = ",".join(desired_sites_list)
 
         # per-subtask priority
         st_prio = _ensure(view["workflows"], request, subtask, "_priority")
@@ -955,6 +1152,7 @@ class State:
                 bucket.setdefault(minute, {})
                 bucket[minute].setdefault(code_str, 0)
                 bucket[minute][code_str] += 1
+                self._dirty_wfs["prodview"].add(request)
                 # Per-subtask breakdown for the Subtasks table.
                 subtask = job.get("WMAgent_SubTaskName") or request
                 st_bucket = _ensure(self.exit_codes_by_subtask,
@@ -1021,6 +1219,7 @@ class State:
                     bucket.setdefault(minute, {})
                     bucket[minute].setdefault(code_str, 0)
                     bucket[minute][code_str] += 1
+                    self._dirty_wfs["analysisview"].add(wf_key)
                     site_bucket = _ensure(self.exit_codes_by_site,
                                           "analysisview", wf_key, site)
                     site_bucket.setdefault(minute, {})
@@ -1060,6 +1259,7 @@ class State:
             bucket.setdefault(minute, {})
             bucket[minute].setdefault(gv_code, 0)
             bucket[minute][gv_code] += 1
+            self._dirty_wfs["globalview"].add(gv_key)
             site_bucket = _ensure(self.exit_codes_by_site,
                                   "globalview", gv_key, site)
             site_bucket.setdefault(minute, {})
@@ -1331,19 +1531,23 @@ class State:
             eff_view = self.efficiency.get(view, {})
             eff_site_view = self.efficiency_by_site.get(view, {})
 
-            # Window-level exit code rollup
+            # Window-level exit code rollup — single pass over each wf's
+            # buckets, accumulating into all 3 windows at once.
+            cutoffs, oldest = _window_cutoffs(now_bucket)
+            owner_window_codes = {wl: {} for wl, _ in cutoffs}
+            for wf in owner_wfs:
+                for ts, tcodes in ec_view.get(wf, {}).items():
+                    if ts < oldest:
+                        continue
+                    for wl, cutoff in cutoffs:
+                        if ts >= cutoff:
+                            wcodes = owner_window_codes[wl]
+                            for code, cnt in tcodes.items():
+                                wcodes[code] = wcodes.get(code, 0) + cnt
             owner_windows = {}
-            for wlabel, wsec in EXIT_CODE_WINDOWS.items():
-                cutoff = now_bucket - wsec
-                wcodes = {}
-                for wf in owner_wfs:
-                    for ts, tcodes in ec_view.get(wf, {}).items():
-                        if ts < cutoff:
-                            continue
-                        for code, cnt in tcodes.items():
-                            wcodes[code] = wcodes.get(code, 0) + cnt
+            for wlabel, wcodes in owner_window_codes.items():
                 wtotal = sum(wcodes.values())
-                wfail = sum(v for k, v in wcodes.items() if k != "0")
+                wfail = wtotal - wcodes.get("0", 0)
                 owner_windows[wlabel] = {
                     "total": wtotal,
                     "failures": wfail,
@@ -1352,60 +1556,72 @@ class State:
                     "codes": wcodes,
                 }
 
-            # Per-site rollup with summed efficiency
+            # Per-site rollup with summed efficiency — single pass per
+            # (wf, site) over both ec and eff buckets.
             sites_for_owner = set()
             for wf in owner_wfs:
                 sites_for_owner.update(ec_site_view.get(wf, {}).keys())
             owner_sites_ec = {}
             for site in sites_for_owner:
+                # Per-window accumulators
+                ec_acc = {wl: [0, 0] for wl, _ in cutoffs}
+                eff_acc = {wl: [0, 0, 0, 0] for wl, _ in cutoffs}
+                for wf in owner_wfs:
+                    for ts, scodes in (ec_site_view.get(wf, {})
+                                       .get(site, {}).items()):
+                        if ts < oldest:
+                            continue
+                        tot = sum(scodes.values())
+                        fail = tot - scodes.get("0", 0)
+                        for wl, cutoff in cutoffs:
+                            if ts >= cutoff:
+                                pair = ec_acc[wl]
+                                pair[0] += tot
+                                pair[1] += fail
+                    for ts, b in (eff_site_view.get(wf, {})
+                                  .get(site, {}).items()):
+                        if ts < oldest:
+                            continue
+                        for wl, cutoff in cutoffs:
+                            if ts >= cutoff:
+                                v = eff_acc[wl]
+                                v[0] += b.get("cpu", 0)
+                                v[1] += b.get("wall_cpus", 0)
+                                v[2] += b.get("slot_ok", 0)
+                                v[3] += b.get("slot_all", 0)
                 site_windows = {}
-                for wlabel, wsec in EXIT_CODE_WINDOWS.items():
-                    cutoff = now_bucket - wsec
-                    total = failures = 0
-                    cpu = wall_cpus = slot_ok = slot_all = 0
-                    for wf in owner_wfs:
-                        for ts, scodes in (ec_site_view.get(wf, {})
-                                           .get(site, {}).items()):
-                            if ts < cutoff:
-                                continue
-                            for code, cnt in scodes.items():
-                                total += cnt
-                                if code != "0":
-                                    failures += cnt
-                        for ts, b in (eff_site_view.get(wf, {})
-                                      .get(site, {}).items()):
-                            if ts < cutoff:
-                                continue
-                            cpu += b.get("cpu", 0)
-                            wall_cpus += b.get("wall_cpus", 0)
-                            slot_ok += b.get("slot_ok", 0)
-                            slot_all += b.get("slot_all", 0)
-                    if total:
-                        site_windows[wlabel] = {
-                            "total": total,
-                            "failures": failures,
-                            "failure_rate": round(failures / total, 4),
-                            "running_eff": (round(cpu / wall_cpus, 4)
-                                            if wall_cpus else 0),
-                            "processing_eff": (round(slot_ok / slot_all, 4)
-                                               if slot_all else 0),
-                        }
+                for wlabel, (total, failures) in ec_acc.items():
+                    if not total:
+                        continue
+                    cpu, wall_cpus, slot_ok, slot_all = eff_acc[wlabel]
+                    site_windows[wlabel] = {
+                        "total": total,
+                        "failures": failures,
+                        "failure_rate": round(failures / total, 4),
+                        "running_eff": (round(cpu / wall_cpus, 4)
+                                        if wall_cpus else 0),
+                        "processing_eff": (round(slot_ok / slot_all, 4)
+                                           if slot_all else 0),
+                    }
                 if site_windows:
                     owner_sites_ec[site] = site_windows
 
-            # Window-level efficiency rollup
+            # Window-level efficiency rollup — single pass per wf
+            owner_eff_acc = {wl: [0, 0, 0, 0] for wl, _ in cutoffs}
+            for wf in owner_wfs:
+                for ts, b in eff_view.get(wf, {}).items():
+                    if ts < oldest:
+                        continue
+                    for wl, cutoff in cutoffs:
+                        if ts >= cutoff:
+                            v = owner_eff_acc[wl]
+                            v[0] += b.get("cpu", 0)
+                            v[1] += b.get("wall_cpus", 0)
+                            v[2] += b.get("slot_ok", 0)
+                            v[3] += b.get("slot_all", 0)
             owner_eff = {}
-            for wlabel, wsec in EXIT_CODE_WINDOWS.items():
-                cutoff = now_bucket - wsec
-                cpu = wall_cpus = slot_ok = slot_all = 0
-                for wf in owner_wfs:
-                    for ts, b in eff_view.get(wf, {}).items():
-                        if ts < cutoff:
-                            continue
-                        cpu += b.get("cpu", 0)
-                        wall_cpus += b.get("wall_cpus", 0)
-                        slot_ok += b.get("slot_ok", 0)
-                        slot_all += b.get("slot_all", 0)
+            for wlabel, (cpu, wall_cpus, slot_ok, slot_all) in (
+                    owner_eff_acc.items()):
                 owner_eff[wlabel] = {
                     "running_eff": (round(cpu / wall_cpus, 4)
                                     if wall_cpus else 0),
@@ -1473,13 +1689,63 @@ class State:
             })
 
     def flush_exit_codes(self, cfg):
-        """Write exit code JSON files for each view."""
+        """Write exit code JSON files for each view, in parallel.
+
+        Each view's writes are independent (disjoint disk paths, no
+        shared state mutation), so we fork one child per view and join.
+        Globalview alone runs ~70s; sequential total is ~115s. Forking
+        cuts wall time to the slowest view (~70s) and saves ~45s/cycle.
+
+        Children inherit a COW copy of state, mutate nothing the parent
+        cares about, and just write JSON. After all children exit the
+        parent clears the dirty-workflow tracker and snapshots now_site.
+        """
+        import multiprocessing as mp
+        views_to_flush = []
         for view in ("prodview", "analysisview", "globalview"):
+            basedir = cfg.get(view, "basedir")
+            if os.path.isdir(basedir):
+                views_to_flush.append(view)
+
+        ctx = mp.get_context("fork")
+        procs = []
+        for view in views_to_flush:
+            p = ctx.Process(target=self._flush_one_view, args=(cfg, view))
+            p.start()
+            procs.append((view, p))
+        failed = []
+        for view, p in procs:
+            p.join()
+            if p.exitcode != 0:
+                failed.append((view, p.exitcode))
+        if failed:
+            log.error("flush_exit_codes workers failed: %s", failed)
+
+        # All views flushed: snapshot now_site and clear dirty tracker
+        # in the parent. Children's clears (if any) didn't propagate.
+        self._last_flush_now_site = (
+            int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET)
+        for v in self._dirty_wfs:
+            self._dirty_wfs[v].clear()
+
+    def _flush_one_view(self, cfg, target_view):
+        """Per-view body of flush_exit_codes. Called either directly or
+        via a forked subprocess. Iterates the existing per-view block
+        but only acts on `target_view`, so we can keep the original
+        body's indentation."""
+        _reset_worker_signals()
+        import time as _t
+        for view in ("prodview", "analysisview", "globalview"):
+            if view != target_view:
+                continue
             basedir = cfg.get(view, "basedir")
             if not os.path.isdir(basedir):
                 continue
 
+            _ts = {}
+            _t0 = _t.perf_counter()
             flat = self._flatten_exit_codes(view)
+            _ts["flatten"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
 
             # Multi-window stats
             windows = {}
@@ -1516,6 +1782,8 @@ class State:
                     "wall_cpu_hours": round(wall_cpus / 3600, 1),
                 }
 
+            _ts["windows_view_eff"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
+
             # Backward-compat top-level from 1h window
             w1h = windows.get("1h", {})
             _atomic_json(os.path.join(basedir, "exit_codes.json"), {
@@ -1535,39 +1803,38 @@ class State:
             _atomic_json(os.path.join(basedir, "completion_histogram.json"),
                          histogram)
 
-            total_jobs = w1h.get("total", 0)
-            total_failures = w1h.get("failures", 0)
-
             now_site = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
 
-            # Per-workflow exit code files
+            _ts["topfile_hist"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
+
+            # Per-workflow exit code files. Skip writes when neither the
+            # workflow nor its window cutoffs changed since last flush —
+            # the on-disk file is still accurate.
+            do_full = (now_site != self._last_flush_now_site)
+            dirty_set = self._dirty_wfs.get(view, set())
+            wf_n = 0
+            wf_written = 0
             wf_completion = {}  # {wf: {total, failures, failure_rate}} for 1h
             for wf, codes in flat.items():
                 if not _safe_name(wf):
                     continue
-                wf_total = sum(codes.values())
-                wf_failures = sum(v for k, v in codes.items() if k != "0")
+                wf_n += 1
                 wf_dir = os.path.join(basedir, wf.replace("/", os.sep))
-                os.makedirs(wf_dir, exist_ok=True)
+                needs_write = do_full or (wf in dirty_set)
+                if needs_write:
+                    os.makedirs(wf_dir, exist_ok=True)
                 # Per-site completion stats for this workflow
                 site_data = self.exit_codes_by_site.get(view, {}).get(wf, {})
                 wf_sites_ec = {}
                 for site, buckets in site_data.items():
+                    site_totals = _window_totals(buckets, now_site)
                     site_windows = {}
-                    for wlabel, wsec in EXIT_CODE_WINDOWS.items():
-                        cutoff = now_site - wsec
-                        total = failures = 0
-                        for ts, scodes in buckets.items():
-                            if ts < cutoff:
-                                continue
-                            for code, cnt in scodes.items():
-                                total += cnt
-                                if code != "0":
-                                    failures += cnt
+                    for wlabel, (total, failures) in site_totals.items():
                         if total:
                             eff_b = self.efficiency_by_site.get(
                                 view, {}).get(wf, {}).get(site, {})
-                            eff = self._compute_efficiency(eff_b, cutoff)
+                            eff = self._compute_efficiency(
+                                eff_b, now_site - EXIT_CODE_WINDOWS[wlabel])
                             site_windows[wlabel] = {
                                 "total": total,
                                 "failures": failures,
@@ -1579,17 +1846,11 @@ class State:
                         wf_sites_ec[site] = site_windows
                 # Per-request windowed stats
                 wf_buckets = self.exit_codes.get(view, {}).get(wf, {})
+                wf_window_codes = _window_codes(wf_buckets, now_site)
                 wf_windows = {}
-                for wlabel, wsec in EXIT_CODE_WINDOWS.items():
-                    cutoff = now_site - wsec
-                    wcodes = {}
-                    for ts, tcodes in wf_buckets.items():
-                        if ts < cutoff:
-                            continue
-                        for code, cnt in tcodes.items():
-                            wcodes[code] = wcodes.get(code, 0) + cnt
+                for wlabel, wcodes in wf_window_codes.items():
                     wtotal = sum(wcodes.values())
-                    wfail = sum(v for k, v in wcodes.items() if k != "0")
+                    wfail = wtotal - wcodes.get("0", 0)
                     wf_windows[wlabel] = {
                         "total": wtotal, "failures": wfail,
                         "failure_rate": (round(wfail / wtotal, 4)
@@ -1634,6 +1895,8 @@ class State:
                         "lt_processing_eff": lt_pe,
                     }
                 wf_w1h = wf_windows.get("1h", {})
+                if not needs_write:
+                    continue
                 _atomic_json(os.path.join(wf_dir, "exit_codes.json"), {
                     "updated": self.updated,
                     "codes": wf_w1h.get("codes", {}),
@@ -1665,6 +1928,11 @@ class State:
                     "success": [wf_hist[t]["success"] for t in hist_ts],
                     "failure": [wf_hist[t]["failure"] for t in hist_ts],
                 })
+                wf_written += 1
+
+            _ts["per_wf_loop"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
+            log.info("per_wf %s: n=%d written=%d full=%s",
+                     view, wf_n, wf_written, do_full)
 
             # globalview-only: per-owner roll-up. Exit codes are tracked
             # per "<owner>/<task>" key, but the URL /globalview/request/<owner>
@@ -1674,6 +1942,7 @@ class State:
             if view == "globalview":
                 self._flush_globalview_owner_rollup(
                     basedir, flat, now_site)
+            _ts["owner_rollup"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
 
             _atomic_json(os.path.join(basedir, "wf_completion.json"), {
                 "updated": self.updated,
@@ -1731,6 +2000,8 @@ class State:
                     "users": users_agg,
                 })
 
+            _ts["per_code_detail"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
+
             # _all.json — all completed jobs (full 7d window)
             all_workflows = {}
             all_sites = {}
@@ -1760,6 +2031,8 @@ class State:
                 "users": all_users,
             })
 
+            _ts["all_json"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
+
             # View-level per-site completion stats (aggregated across all workflows)
             # Also build completion cross-reference: {wf: {site: [done, fail]}}
             view_site_ec = {}
@@ -1768,37 +2041,35 @@ class State:
             completion_xref = {}  # {wf: {site: [done_1h, fail_1h]}}
             cutoff_1h = now_site - EXIT_CODE_WINDOWS["1h"]
             cutoff_7d = now_site - EXIT_CODE_WINDOWS["7d"]
+            view_cutoffs, view_oldest = _window_cutoffs(now_site)
             for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
                 for site, buckets in site_data.items():
-                    for wlabel, wsec in EXIT_CODE_WINDOWS.items():
-                        cutoff = now_site - wsec
-                        for ts, codes in buckets.items():
-                            if ts < cutoff:
-                                continue
-                            sw = (view_site_ec.setdefault(site, {})
-                                  .setdefault(wlabel,
-                                              {"total": 0, "failures": 0}))
-                            for code, cnt in codes.items():
-                                sw["total"] += cnt
-                                if code != "0":
-                                    sw["failures"] += cnt
-                    # Per-code counts for 1h/7d windows + completion cross-ref
                     wf_site_done = 0
                     wf_site_fail = 0
+                    sc7_dst = site_codes_7d.setdefault(site, {})
+                    sc1_dst = site_codes_1h.setdefault(site, {})
+                    site_view_dst = view_site_ec.setdefault(site, {})
+                    # Single pass: per-window totals + per-code 1h/7d
                     for ts, codes in buckets.items():
-                        if ts >= cutoff_7d:
-                            sc7 = site_codes_7d.setdefault(site, {})
-                            for code, cnt in codes.items():
-                                sc7[code] = sc7.get(code, 0) + cnt
-                        if ts < cutoff_1h:
+                        if ts < view_oldest:
                             continue
-                        sc = site_codes_1h.setdefault(site, {})
-                        for code, cnt in codes.items():
-                            sc.setdefault(code, 0)
-                            sc[code] += cnt
-                            wf_site_done += cnt
-                            if code != "0":
-                                wf_site_fail += cnt
+                        tot = sum(codes.values())
+                        fail = tot - codes.get("0", 0)
+                        for wl, cutoff in view_cutoffs:
+                            if ts >= cutoff:
+                                sw = site_view_dst.setdefault(
+                                    wl, {"total": 0, "failures": 0})
+                                sw["total"] += tot
+                                sw["failures"] += fail
+                        if ts >= cutoff_7d:
+                            for code, cnt in codes.items():
+                                sc7_dst[code] = sc7_dst.get(code, 0) + cnt
+                        if ts >= cutoff_1h:
+                            for code, cnt in codes.items():
+                                sc1_dst[code] = sc1_dst.get(code, 0) + cnt
+                                wf_site_done += cnt
+                                if code != "0":
+                                    wf_site_fail += cnt
                     if wf_site_done:
                         # Per-wf-per-site efficiency raw values for 1h
                         eff_b = self.efficiency_by_site.get(
@@ -1856,34 +2127,31 @@ class State:
                                       "completion_cross_reference.json"),
                          completion_xref)
 
+            _ts["view_site"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
+
             # Per-site per-request completion stats + efficiency
             site_req_ec = {}
             for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
                 for site, buckets in site_data.items():
-                    for wlabel, wsec in EXIT_CODE_WINDOWS.items():
-                        cutoff = now_site - wsec
-                        total = failures = 0
-                        for ts, codes in buckets.items():
-                            if ts < cutoff:
-                                continue
-                            for code, cnt in codes.items():
-                                total += cnt
-                                if code != "0":
-                                    failures += cnt
-                        if total:
-                            rw = (site_req_ec.setdefault(site, {})
-                                  .setdefault(wf, {}))
+                    site_totals = _window_totals(buckets, now_site)
+                    eff_b = None
+                    for wlabel, (total, failures) in site_totals.items():
+                        if not total:
+                            continue
+                        if eff_b is None:
                             eff_b = self.efficiency_by_site.get(
                                 view, {}).get(wf, {}).get(site, {})
-                            eff = self._compute_efficiency(
-                                eff_b, cutoff)
-                            rw[wlabel] = {
-                                "total": total,
-                                "failures": failures,
-                                "failure_rate": round(failures / total, 4),
-                                "running_eff": eff["running_eff"],
-                                "processing_eff": eff["processing_eff"],
-                            }
+                        eff = self._compute_efficiency(
+                            eff_b, now_site - EXIT_CODE_WINDOWS[wlabel])
+                        rw = (site_req_ec.setdefault(site, {})
+                              .setdefault(wf, {}))
+                        rw[wlabel] = {
+                            "total": total,
+                            "failures": failures,
+                            "failure_rate": round(failures / total, 4),
+                            "running_eff": eff["running_eff"],
+                            "processing_eff": eff["processing_eff"],
+                        }
             sites_dir = os.path.join(basedir, "_sites")
             os.makedirs(sites_dir, exist_ok=True)
             for site, reqs in site_req_ec.items():
@@ -1893,6 +2161,8 @@ class State:
                     "updated": self.updated,
                     "requests": reqs,
                 })
+
+            _ts["site_req"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
 
             # Per-site completion histograms
             site_hists = {}
@@ -1917,6 +2187,8 @@ class State:
                     "success": [hist[t]["success"] for t in hist_ts],
                     "failure": [hist[t]["failure"] for t in hist_ts],
                 })
+
+            _ts["site_hists"] = _t.perf_counter() - _t0; _t0 = _t.perf_counter()
 
             # Per-site failed job records + view-level combined file
             all_failed = []
@@ -1953,6 +2225,9 @@ class State:
                 "updated": self.updated,
                 "jobs": all_failed,
             })
+            _ts["failed_jobs"] = _t.perf_counter() - _t0
+            log.info("flush_exit_codes %s: %s", view,
+                     ", ".join(f"{k}={v:.1f}s" for k, v in _ts.items()))
 
     def flush_exit_code_state(self, cfg):
         """Persist exit code buckets and watermarks for restart recovery."""

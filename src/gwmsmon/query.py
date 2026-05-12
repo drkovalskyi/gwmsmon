@@ -16,7 +16,6 @@ import multiprocessing as mp
 import time
 from concurrent.futures import (
     ProcessPoolExecutor,
-    ThreadPoolExecutor,
     as_completed,
 )
 from urllib.request import urlopen
@@ -167,6 +166,22 @@ def query_schedd(schedd_ad, projection=None):
 _libc = None
 
 
+def _reset_worker_signals():
+    """Reset SIGTERM/SIGINT to SIG_DFL in a forked subprocess.
+
+    Workers inherit parent's signal handlers; that handler logs but does
+    not interrupt their blocking C-level reads (incident 2026-05-11:
+    8-worker pool stuck for 22h after SIGTERM). Default handlers let
+    the kernel kill the worker cleanly.
+    """
+    import signal
+    try:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+    except (ValueError, OSError):
+        pass
+
+
 def _worker_malloc_trim():
     """Call malloc_trim(0) in the worker to release freed pages back
     to the OS. Reduces worker RSS between successive schedd queries
@@ -196,6 +211,7 @@ def _worker_query_schedd(name, my_address, stype, projection):
     glibc-held free pages back to the OS so worker RSS doesn't grow
     monotonically across the cycle's tasks.
     """
+    _reset_worker_signals()
     ad = classad.ClassAd()
     ad["MyAddress"] = my_address
     ad["Name"] = name
@@ -321,11 +337,42 @@ def query_schedd_history(schedd_ad, since_time, projection=None):
     return jobs
 
 
-def query_history_parallel(schedd_info, watermarks, default_since=300,
-                           projection=None, max_workers=24):
-    """Query all schedds history in parallel for recently completed jobs.
+def _worker_query_history(name, my_address, stype, since_time, projection):
+    """Run in subprocess: schedd.history() query, convert to dicts, tag.
 
-    schedd_info: list of (schedd_ad, schedd_name, schedd_type)
+    Same pattern as _worker_query_schedd. Builds a synthetic schedd ad
+    from name + MyAddress, queries history with the since-watermark
+    stop condition, converts every ad to a plain Python dict, tags with
+    schedd/_schedd_type, and returns. malloc_trim releases freed pages
+    so worker RSS doesn't accumulate across the cycle's tasks.
+    """
+    _reset_worker_signals()
+    ad = classad.ClassAd()
+    ad["MyAddress"] = my_address
+    ad["Name"] = name
+    schedd = htcondor.Schedd(ad)
+    since_expr = "CompletionDate < {}".format(int(since_time))
+    jobs = []
+    for a in schedd.history(
+        constraint="true",
+        projection=projection,
+        match=-1,
+        since=since_expr,
+    ):
+        d = convert_ad(a, projection)
+        d["_schedd"] = name
+        d["_schedd_type"] = stype
+        jobs.append(d)
+    gc.collect()
+    _worker_malloc_trim()
+    return jobs, name
+
+
+def query_history_parallel(schedd_info, watermarks, default_since=300,
+                           projection=None, max_workers=8):
+    """Query all schedds history in parallel processes.
+
+    schedd_info: list of (schedd_ad, schedd_name, schedd_type, health)
     watermarks: dict of {schedd_name: last_query_timestamp}
     default_since: seconds back from now for schedds with no watermark
 
@@ -340,26 +387,28 @@ def query_history_parallel(schedd_info, watermarks, default_since=300,
     failed = []
     new_watermarks = {}
 
-    def _query_one(ad, name, stype):
-        since_time = watermarks.get(name, now - default_since)
-        jobs = query_schedd_history(ad, since_time, projection)
-        for job in jobs:
-            job["_schedd"] = name
-            job["_schedd_type"] = stype
-        return jobs
-
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+    ctx = mp.get_context("fork")
+    with ProcessPoolExecutor(max_workers=max_workers,
+                             mp_context=ctx) as pool:
         futures = {}
         for ad, name, stype, _health in schedd_info:
-            f = pool.submit(_query_one, ad, name, stype)
+            my_addr = classad_to_python(ad.get("MyAddress", ""))
+            if not my_addr:
+                log.warning("schedd %s has no MyAddress, skipping history",
+                            name)
+                failed.append(name)
+                continue
+            since_time = watermarks.get(name, now - default_since)
+            f = pool.submit(_worker_query_history,
+                            name, my_addr, stype, since_time, projection)
             futures[f] = name
 
         for f in as_completed(futures):
             name = futures[f]
             try:
-                result = f.result()
-                all_jobs.extend(result)
-                del result
+                jobs, _name = f.result()
+                all_jobs.extend(jobs)
+                del jobs
                 new_watermarks[name] = now
             except Exception:
                 log.warning("failed to query history for schedd %s, skipping",

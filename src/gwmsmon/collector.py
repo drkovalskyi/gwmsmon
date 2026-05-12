@@ -8,6 +8,7 @@ import logging
 import os
 import resource
 import signal
+import socket
 import sys
 import time
 import tracemalloc
@@ -43,6 +44,33 @@ def _rss_mb():
     except OSError:
         pass
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
+
+def _notify_watchdog(state=None):
+    """Send a WATCHDOG=1 ping (and optionally STATUS=...) to systemd's
+    NOTIFY_SOCKET. No-op when not running under systemd.
+
+    Wired into every phase of the collection cycle: if any phase hangs
+    longer than WatchdogSec (set in the unit file), systemd kills the
+    service and restarts it. The 2026-05-11 incident was a 22 h Pool.map
+    wedge that silently held all 8 worker processes alive — exactly the
+    kind of failure this watchdog is meant to catch.
+    """
+    sock_path = os.environ.get("NOTIFY_SOCKET")
+    if not sock_path:
+        return
+    msg = "WATCHDOG=1"
+    if state:
+        msg += f"\nSTATUS={state}"
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        if sock_path.startswith("@"):
+            sock_path = "\0" + sock_path[1:]  # abstract namespace
+        s.connect(sock_path)
+        s.sendall(msg.encode())
+        s.close()
+    except OSError:
+        pass  # systemd not reachable; skip silently
 
 from gwmsmon import config
 from gwmsmon.query import query_all, query_history_parallel, query_accounting_ads
@@ -148,15 +176,25 @@ def main():
         log.info("--- cycle %d ---", cycle)
 
         rss_phase = {"start": _rss_mb()}
+        phase_t = {}
+        _notify_watchdog(f"cycle {cycle}: start")
         try:
+            tp = time.perf_counter()
             jobs, summary_ads, factory_data, schedd_info = query_all(cfg)
+            phase_t["query_all"] = time.perf_counter() - tp
             rss_phase["after_query_all"] = _rss_mb()
+            _notify_watchdog(f"cycle {cycle}: query_all done")
             neg_hosts = cfg.get("htcondor", "negotiator_collectors",
                                 fallback="")
+            tp = time.perf_counter()
             accounting_ads = query_accounting_ads(neg_hosts) if neg_hosts else []
+            phase_t["acct_ads"] = time.perf_counter() - tp
             rss_phase["after_acct_ads"] = _rss_mb()
+            tp = time.perf_counter()
             state.update(jobs, summary_ads, factory_data, accounting_ads)
+            phase_t["state_update"] = time.perf_counter() - tp
             rss_phase["after_state_update"] = _rss_mb()
+            _notify_watchdog(f"cycle {cycle}: state_update done")
             del jobs, summary_ads, factory_data, accounting_ads
             for _ in range(3):
                 gc.collect()
@@ -165,35 +203,57 @@ def main():
             rss_phase["after_malloc_trim_1"] = _rss_mb()
 
             # Exit code collection via schedd.history()
-            t_hist = time.time()
+            tp = time.perf_counter()
             history_jobs, new_watermarks = query_history_parallel(
                 schedd_info, state.history_watermarks
             )
+            phase_t["history_query"] = time.perf_counter() - tp
             state.history_watermarks = new_watermarks
             hist_count = len(history_jobs)
+            tp = time.perf_counter()
             state.update_exit_codes(history_jobs)
+            phase_t["update_exit_codes"] = time.perf_counter() - tp
             del history_jobs, schedd_info
             for _ in range(3):
                 gc.collect()
             rss_phase["after_history"] = _rss_mb()
             log.info("history query: %d jobs in %.1fs",
-                     hist_count, time.time() - t_hist)
+                     hist_count, phase_t["history_query"])
+            _notify_watchdog(f"cycle {cycle}: history done")
 
+            tp = time.perf_counter()
             state._append_timeseries()
+            phase_t["append_ts"] = time.perf_counter() - tp
+            tp = time.perf_counter()
             state.flush_snapshot(cfg)
+            phase_t["flush_snapshot"] = time.perf_counter() - tp
+            _notify_watchdog(f"cycle {cycle}: flush_snapshot done")
+            tp = time.perf_counter()
             state.flush_exit_codes(cfg)
+            phase_t["flush_exit_codes"] = time.perf_counter() - tp
             rss_phase["after_flush"] = _rss_mb()
+            _notify_watchdog(f"cycle {cycle}: flush_exit_codes done")
 
             if cycle % TS_FLUSH_INTERVAL == 0:
+                tp = time.perf_counter()
                 state.flush_timeseries(cfg)
+                phase_t["flush_ts"] = time.perf_counter() - tp
+                tp = time.perf_counter()
                 state.flush_exit_code_state(cfg)
+                phase_t["flush_ec_state"] = time.perf_counter() - tp
+                _notify_watchdog(f"cycle {cycle}: flush_ts done")
 
             if cycle % MAINTENANCE_INTERVAL == 0:
+                tp = time.perf_counter()
                 state.maintenance()
+                phase_t["maintenance"] = time.perf_counter() - tp
+                tp = time.perf_counter()
                 state.prune_dirs(cfg)
+                phase_t["prune_dirs"] = time.perf_counter() - tp
 
             _malloc_trim()
             rss_phase["after_malloc_trim_2"] = _rss_mb()
+            _notify_watchdog(f"cycle {cycle}: complete")
 
         except Exception:
             log.error("cycle %d failed", cycle, exc_info=True)
@@ -209,6 +269,9 @@ def main():
         log.info("cycle %d completed in %.1fs | RSS=%.0fMB | "
                  "ts_entities=%d ts_points=%d",
                  cycle, elapsed, rss_mb, ts_entities, ts_points)
+        # Per-phase wall time — attribute the cycle budget.
+        log.info("phase_time: " + ", ".join(
+            f"{k}={v:.1f}s" for k, v in phase_t.items()))
         # Per-phase RSS — diagnose where memory accumulates and whether
         # malloc_trim() releases pages back to the OS.
         log.info("rss_per_phase: " + ", ".join(
@@ -302,8 +365,21 @@ def main():
             state_size_mb = round(os.path.getsize(state_path) / 1024 / 1024, 1)
         except OSError:
             state_size_mb = 0
-        status_history.record(round(elapsed, 1), round(rss_mb), state_size_mb)
+        status_history.record(round(elapsed, 1), round(rss_mb),
+                              state_size_mb, cycle=cycle)
         status_history.flush(cfg.get("prodview", "basedir"))
+
+        # Re-write service_status.json with leak report (depends on
+        # the just-recorded RSS sample).
+        try:
+            with open(status_path, "r+") as f:
+                doc = _json.load(f)
+                doc["leak"] = status_history.leak_report()
+                f.seek(0)
+                _json.dump(doc, f)
+                f.truncate()
+        except OSError:
+            pass
 
         if args.once:
             break

@@ -1092,6 +1092,19 @@ class State:
                     "ConfigQuota": ad.get("ConfigQuota", 0),
                     "EffectiveQuota": ad.get("EffectiveQuota", 0),
                     "SurplusPolicy": ad.get("SurplusPolicy", ""),
+                    # Group-level fair-share priority — drives surplus
+                    # distribution between groups. Lower Priority means
+                    # the negotiator favours this group on the next
+                    # cycle. PriorityFactor is the admin-set multiplier
+                    # applied to the raw decayed-usage EMA. Requested
+                    # is the group's total weighted demand (idle+
+                    # running). AccumulatedUsage is lifetime weighted
+                    # consumption since BeginUsageTime — useful for
+                    # context but does NOT drive priority.
+                    "Priority": ad.get("Priority", 0),
+                    "PriorityFactor": ad.get("PriorityFactor", 1),
+                    "Requested": ad.get("Requested", 0),
+                    "AccumulatedUsage": ad.get("AccumulatedUsage", 0),
                 }
             else:
                 acct_group = ad.get("AccountingGroup", "")

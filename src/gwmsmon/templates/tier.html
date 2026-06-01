@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}{{ tier }} — Global — gwmsmon{% endblock %}
+{% block content %}
+<h1><a href="/globalview/">Global</a> / Tier {{ tier }}</h1>
+
+<p style="color:var(--text-muted);font-size:0.95em;margin:0 0 12px 0">
+  Pool size: <strong>{{ tier_total|fmt }}</strong> cores — what the
+  negotiator at this tier currently sees, summed across all groups'
+  EffectiveQuota. The (idle/unmatched capacity) row is the gap between
+  pool size and what's actually running.
+</p>
+
+<table class="data-table compact">
+  <thead><tr>
+    <th title="Accounting group">Group</th>
+    <th title="Static fraction set in HTCondor (GROUP_QUOTA_DYNAMIC). With SurplusPolicy=byquota groups can exceed this by absorbing idle siblings' shares.">Config Share</th>
+    <th title="Weighted resources (cores) the group is running right now">Cores Used</th>
+    <th title="Cores Used / Pool Size">% of Pool</th>
+    <th title="Group's total weighted demand (idle + running). If much larger than Cores Used, the group has unmet demand and is being throttled by the negotiator.">Requested</th>
+    <th title="Group's fair-share Priority — exponentially-decayed EMA of recent usage * PriorityFactor. LOWER is better (served first). HIGHER means heavy recent usage and the group will be deprioritized for surplus.">Priority</th>
+    <th title="Admin-set multiplier on the priority. Identical across groups here (100) so it doesn't differentiate them.">PF</th>
+    <th title="Priority / PriorityFactor — approximates recent decayed usage in cores. The negotiator compares these between groups when deciding surplus distribution.">Eff. Prio</th>
+    <th title="Lifetime weighted consumption since BeginUsageTime. Cumulative; does NOT drive surplus decisions (the decayed Priority does).">Lifetime Usage</th>
+    <th>Surplus Policy</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr{% if r.is_idle_row %} style="color:var(--text-muted);font-style:italic"{% endif %}>
+    {% if r.is_idle_row or r.ConfigQuota is none %}
+    <td>{{ r.group }}</td>
+    {% else %}
+    <td><a href="/globalview/group/{{ r.group }}">{{ r.group }}</a></td>
+    {% endif %}
+    <td>{% if r.ConfigQuota is none %}—{% else %}{{ "%.2f%%"|format(r.ConfigQuota * 100) }}{% endif %}</td>
+    <td>{{ r.used|fmt }}</td>
+    <td>{{ "%.2f%%"|format(r.pct) }}</td>
+    <td>{% if r.Requested is none %}—{% else %}{{ r.Requested|int|fmt }}{% endif %}</td>
+    <td>{% if r.Priority is none %}—{% else %}{{ r.Priority|int|fmt }}{% endif %}</td>
+    <td>{% if r.PriorityFactor is none %}—{% else %}{{ "%.0f"|format(r.PriorityFactor) }}{% endif %}</td>
+    <td>{% if r.EffectivePriority is none %}—{% else %}{{ r.EffectivePriority|int|fmt }}{% endif %}</td>
+    <td>{% if r.AccumulatedUsage is none %}—{% else %}{{ r.AccumulatedUsage|int|fmt }}{% endif %}</td>
+    <td>{{ r.SurplusPolicy }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+  <tfoot>
+  <tr style="font-weight:600;border-top:2px solid var(--border)">
+    <td>Total</td>
+    <td>100.00%</td>
+    <td>{{ tier_total|fmt }}</td>
+    <td>100.00%</td>
+    <td colspan="6"></td>
+  </tr>
+  </tfoot>
+</table>
+
+<details class="section" data-section="tier_explainer">
+  <summary><h2>How to read this</h2></summary>
+  <div style="color:var(--text-muted);font-size:0.9em;max-width:900px">
+  <p>
+    <strong>Config Share</strong> is the static fraction set in HTCondor.
+    Quotas at a tier sum to 100%. With <code>SurplusPolicy=byquota</code>
+    and <code>GROUP_AUTOREGROUP=True</code>, a group can exceed its
+    static share by absorbing siblings' idle quota.
+  </p>
+  <p>
+    <strong>Cores Used / % of Pool</strong> is what the group is
+    actually running right now (sum of its users'
+    <code>WeightedResourcesUsed</code>).
+  </p>
+  <p>
+    <strong>Requested</strong> is the group's total weighted demand —
+    idle plus running. If <em>Requested ≫ Cores Used</em> the group has
+    unmet demand and is being throttled by the negotiator. If
+    <em>Requested ≈ Cores Used</em> the group is demand-limited (it
+    could grab more but has nothing to schedule).
+  </p>
+  <p>
+    <strong>Priority / Eff. Prio</strong> is the group's fair-share
+    Priority. It's an exponentially-decayed EMA of recent usage,
+    multiplied by <strong>PF</strong> (PriorityFactor). LOWER is
+    better — the negotiator serves low-priority groups first. A group
+    that's been hammering the pool recently has a high Priority; it
+    decays back over time (PRIORITY_HALFLIFE).
+  </p>
+  <p>
+    <strong>Lifetime Usage</strong> is cumulative since the group's
+    BeginUsageTime (often years ago). It does NOT drive surplus
+    decisions — only the decayed Priority does. A group can have low
+    lifetime usage but a high current Priority (and vice-versa).
+  </p>
+  <p>
+    Between-group surplus distribution depends on the negotiator's
+    config (<code>GROUP_SORT_EXPR</code>, <code>GROUP_AUTOREGROUP</code>,
+    per-group <code>SurplusPolicy</code>) which isn't visible from the
+    accounting ads. Pure quota-proportional and pure priority-proportional
+    are bracketing extremes; the actual share-out is somewhere between
+    and depends on those settings.
+  </p>
+  </div>
+</details>
+{% endblock %}

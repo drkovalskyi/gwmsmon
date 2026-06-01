@@ -363,18 +363,28 @@ def create_app(config_path="/etc/gwmsmon.conf"):
                 users.append((user, group_stats[name]))
         users.sort(key=lambda x: -x[1].get("CpusInUse", 0))
 
-        # Fair share by tier from accounting ads
+        # Per-tier core usage for THIS group. CMS uses SLOT_WEIGHT=Cpus,
+        # so WeightedResourcesUsed is in cores; ResourcesUsed counts
+        # slots (smaller — multi-core slots collapse). EffectiveQuota
+        # is in cores too (SLOT_WEIGHT applied), so we compare like to
+        # like by summing WeightedResourcesUsed.
         acct_groups = accounting.get("groups", {})
+        acct_users = accounting.get("users", {})
         tier_order = ["CERN", "T1", "US_T2", "nonUS_T2_T3"]
         tier_rows = []
         for tier in tier_order:
             tier_groups = acct_groups.get(tier, {})
-            info = tier_groups.get(name, {})
+            used = sum(int(u.get("WeightedResourcesUsed", 0))
+                       for u in acct_users.get(tier, [])
+                       if u.get("group") == name)
+            tier_total = sum(g.get("EffectiveQuota", 0)
+                             for g in tier_groups.values())
+            pct = (used / tier_total * 100) if tier_total else 0
             tier_rows.append({
                 "tier": tier,
-                "ConfigQuota": info.get("ConfigQuota", 0),
-                "EffectiveQuota": info.get("EffectiveQuota", 0),
-                "SurplusPolicy": info.get("SurplusPolicy", ""),
+                "used": used,
+                "tier_total": int(round(tier_total)),
+                "pct": pct,
             })
 
         # Per-tier user priority data
@@ -401,6 +411,98 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             users=users,
             tier_rows=tier_rows,
             tier_users=tier_users,
+            updated=updated,
+            freshness=_freshness(updated),
+            updated_ts=updated,
+        )
+
+    @app.route("/globalview/tier/<tier>")
+    def tier_detail(tier):
+        """Per-tier breakdown: every accounting group with configured
+        share, cores currently used, and that group's share of the
+        tier's total resources.
+
+        Sum of per-group "Cores Used" doesn't equal pool size — the
+        difference is idle/unmatched capacity that the negotiator can
+        hand out but no group is currently consuming. We surface that
+        as an explicit row so the column sums to the pool size."""
+        basedir = cfg.get("globalview", "basedir")
+        accounting = _load_json(basedir, "accounting.json")
+        tier_groups = accounting.get("groups", {}).get(tier)
+        if tier_groups is None:
+            abort(404)
+        tier_users = accounting.get("users", {}).get(tier, [])
+        used_by_group = {}
+        for u in tier_users:
+            g = u.get("group", "")
+            used_by_group[g] = (used_by_group.get(g, 0)
+                                + int(u.get("WeightedResourcesUsed", 0)))
+        tier_total = sum(g.get("EffectiveQuota", 0)
+                         for g in tier_groups.values())
+        rows = []
+        for gname, ginfo in tier_groups.items():
+            used = used_by_group.get(gname, 0)
+            pf = ginfo.get("PriorityFactor", 1) or 1
+            prio = ginfo.get("Priority", 0)
+            rows.append({
+                "group": gname,
+                "is_idle_row": False,
+                "ConfigQuota": ginfo.get("ConfigQuota", 0),
+                "used": used,
+                "pct": (used / tier_total * 100) if tier_total else 0,
+                "SurplusPolicy": ginfo.get("SurplusPolicy", ""),
+                "Priority": prio,
+                "PriorityFactor": pf,
+                "EffectivePriority": prio / pf if pf else 0,
+                "Requested": ginfo.get("Requested", 0),
+                "AccumulatedUsage": ginfo.get("AccumulatedUsage", 0),
+            })
+        # Groups present in users[] but missing from groups[] (ungrouped
+        # users, etc.) — show them so the table accounts for everyone.
+        for gname, used in used_by_group.items():
+            if gname not in tier_groups and used > 0:
+                rows.append({
+                    "group": f"(ungrouped: {gname or '<none>'})",
+                    "is_idle_row": False,
+                    "ConfigQuota": None,
+                    "used": used,
+                    "pct": (used / tier_total * 100) if tier_total else 0,
+                    "SurplusPolicy": "",
+                    "Priority": None,
+                    "PriorityFactor": None,
+                    "EffectivePriority": None,
+                    "Requested": None,
+                    "AccumulatedUsage": None,
+                })
+        rows.sort(key=lambda r: -r["used"])
+        # Idle/unmatched capacity = pool size minus everything users
+        # are actually running. Always last row so the column sums to
+        # tier_total visually.
+        total_used = sum(r["used"] for r in rows)
+        idle = max(0, int(round(tier_total)) - total_used)
+        if idle > 0:
+            rows.append({
+                "group": "(idle / unmatched capacity)",
+                "is_idle_row": True,
+                "ConfigQuota": None,
+                "used": idle,
+                "pct": (idle / tier_total * 100) if tier_total else 0,
+                "SurplusPolicy": "",
+                "Priority": None,
+                "PriorityFactor": None,
+                "EffectivePriority": None,
+                "Requested": None,
+                "AccumulatedUsage": None,
+            })
+        summary = _load_json(basedir, "summary.json")
+        updated = summary.get("updated", 0)
+        return render_template(
+            "tier.html",
+            view="globalview",
+            view_cfg=VIEWS["globalview"],
+            tier=tier,
+            tier_total=int(round(tier_total)),
+            rows=rows,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,

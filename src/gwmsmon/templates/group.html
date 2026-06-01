@@ -29,21 +29,26 @@
 </div>
 
 <details class="section" open data-section="globalview_group_tiers">
-  <summary><h2>Fair Share by Tier</h2></summary>
+  <summary><h2>Resource usage by Tier</h2></summary>
+  <p style="color:var(--text-muted);font-size:0.9em;margin:0 0 8px 0">
+    Cores currently used by this group at each tier, and the fraction
+    of the tier's total capacity that represents. Click a tier to see
+    how all groups share that tier.
+  </p>
   <table class="data-table compact">
     <thead><tr>
       <th>Tier</th>
-      <th data-sort="num">Config Quota</th>
-      <th data-sort="num">Effective Quota</th>
-      <th>Surplus Policy</th>
+      <th data-sort="num">Cores Used</th>
+      <th data-sort="num">Tier Total</th>
+      <th data-sort="num">% of Tier</th>
     </tr></thead>
     <tbody>
     {% for row in tier_rows %}
     <tr>
-      <td>{{ row.tier }}</td>
-      <td>{{ "%.4f"|format(row.ConfigQuota) }}</td>
-      <td>{{ row.EffectiveQuota|fmt }}</td>
-      <td>{{ row.SurplusPolicy }}</td>
+      <td><a href="/globalview/tier/{{ row.tier }}">{{ row.tier }}</a></td>
+      <td>{{ row.used|fmt }}</td>
+      <td>{{ row.tier_total|fmt }}</td>
+      <td>{{ "%.2f%%"|format(row.pct) }}</td>
     </tr>
     {% endfor %}
     </tbody>

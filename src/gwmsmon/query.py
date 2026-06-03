@@ -482,6 +482,71 @@ def negotiator_tier(neg_name):
     return "nonUS_T2_T3"
 
 
+def site_to_tier(site):
+    """Map a CMS site name (GLIDEIN_CMSSite) to a tier label that
+    matches negotiator_tier() so the two can be reconciled."""
+    if not isinstance(site, str) or not site:
+        return "unknown"
+    if site.startswith("T2_CH_CERN"):
+        return "CERN"
+    if site.startswith("T1_"):
+        return "T1"
+    if site.startswith("T2_US_"):
+        return "US_T2"
+    if site.startswith(("T2_", "T3_")):
+        return "nonUS_T2_T3"
+    return "unknown"
+
+
+def query_unclaimed_by_tier(negotiator_collectors):
+    """Per-tier count of unclaimed (idle) slots.
+
+    Queries each negotiator collector for State=="Unclaimed" startds,
+    bins them by GLIDEIN_CMSSite -> tier. Used by /globalview/tier/<T>
+    to split the "unaccounted" residual into real idle capacity vs
+    measurement noise.
+
+    Each negotiator collector typically knows about a subset of slots
+    (the ones it negotiates for); querying all listed collectors and
+    deduplicating by slot Name avoids double-counting in setups where
+    the same slot ad appears in multiple collectors.
+    """
+    hosts = [h.strip() for h in negotiator_collectors.split(",")
+             if h.strip()]
+    seen_names = set()
+    by_tier = {}
+    projection = ["Name", "Cpus", "GLIDEIN_CMSSite"]
+    for host in hosts:
+        try:
+            collector = htcondor.Collector(host)
+            ads = collector.query(
+                htcondor.AdTypes.Startd,
+                constraint='State == "Unclaimed"',
+                projection=projection)
+        except Exception:
+            log.warning("failed to query unclaimed slots from %s",
+                        host, exc_info=True)
+            continue
+        n_added = 0
+        for ad in ads:
+            name = classad_to_python(ad.get("Name"))
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            site = classad_to_python(ad.get("GLIDEIN_CMSSite"))
+            tier = site_to_tier(site)
+            cpus = classad_to_python(ad.get("Cpus", 0)) or 0
+            if not isinstance(cpus, (int, float)):
+                cpus = 0
+            entry = by_tier.setdefault(
+                tier, {"cores": 0, "slots": 0})
+            entry["cores"] += int(cpus)
+            entry["slots"] += 1
+            n_added += 1
+        log.info("unclaimed slots from %s: +%d new", host, n_added)
+    return by_tier
+
+
 def query_accounting_ads(negotiator_collectors):
     """Query Accounting ads from negotiator collector hosts.
 

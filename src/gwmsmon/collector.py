@@ -73,7 +73,10 @@ def _notify_watchdog(state=None):
         pass  # systemd not reachable; skip silently
 
 from gwmsmon import config
-from gwmsmon.query import query_all, query_history_parallel, query_accounting_ads
+from gwmsmon.query import (
+    query_all, query_history_parallel, query_accounting_ads,
+    query_unclaimed_by_tier,
+)
 from gwmsmon.state import State
 from gwmsmon.status_history import StatusHistory
 
@@ -189,9 +192,14 @@ def main():
             tp = time.perf_counter()
             accounting_ads = query_accounting_ads(neg_hosts) if neg_hosts else []
             phase_t["acct_ads"] = time.perf_counter() - tp
+            tp = time.perf_counter()
+            unclaimed_by_tier = (
+                query_unclaimed_by_tier(neg_hosts) if neg_hosts else {})
+            phase_t["unclaimed"] = time.perf_counter() - tp
             rss_phase["after_acct_ads"] = _rss_mb()
             tp = time.perf_counter()
-            state.update(jobs, summary_ads, factory_data, accounting_ads)
+            state.update(jobs, summary_ads, factory_data, accounting_ads,
+                         unclaimed_by_tier=unclaimed_by_tier)
             phase_t["state_update"] = time.perf_counter() - tp
             rss_phase["after_state_update"] = _rss_mb()
             _notify_watchdog(f"cycle {cycle}: state_update done")

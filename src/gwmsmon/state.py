@@ -444,7 +444,8 @@ class State:
         # window cutoffs are identical and only dirty wfs need rewrite.
         self._last_flush_now_site = 0
 
-    def update(self, jobs, summary_ads, factory_data, accounting_ads=None):
+    def update(self, jobs, summary_ads, factory_data, accounting_ads=None,
+               unclaimed_by_tier=None):
         """Rebuild snapshot from fresh data.
 
         One pass through all jobs, routing each to the relevant views
@@ -566,7 +567,8 @@ class State:
         self._process_factory_data(snap, factory_data)
         t_fact = time.time()
         # --- Accounting ads → globalview ---
-        self._process_accounting_ads(snap, accounting_ads or [])
+        self._process_accounting_ads(snap, accounting_ads or [],
+                                     unclaimed_by_tier or {})
         t_acct = time.time()
         log.info(
             "update post-loop: summary=%.1fs factory=%.1fs accounting=%.1fs",
@@ -1072,7 +1074,7 @@ class State:
             "Sites": len(site_summaries),
         }
 
-    def _process_accounting_ads(self, snap, ads):
+    def _process_accounting_ads(self, snap, ads, unclaimed_by_tier=None):
         """Process negotiator Accounting ads into globalview."""
         if not ads:
             return
@@ -1123,6 +1125,7 @@ class State:
         snap["globalview"]["accounting"] = {
             "groups": groups,
             "users": users,
+            "unclaimed_by_tier": unclaimed_by_tier or {},
         }
 
     # --- Step 9: Exit code collection ---
@@ -2652,6 +2655,8 @@ class State:
                         "updated": self.updated,
                         "groups": acct.get("groups", {}),
                         "users": acct.get("users", {}),
+                        "unclaimed_by_tier": acct.get(
+                            "unclaimed_by_tier", {}),
                     })
 
             if view == "analysisview":

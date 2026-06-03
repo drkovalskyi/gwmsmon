@@ -4,98 +4,103 @@
 <h1><a href="/globalview/">Global</a> / Tier {{ tier }}</h1>
 
 <p style="color:var(--text-muted);font-size:0.95em;margin:0 0 12px 0">
-  Pool size: <strong>{{ tier_total|fmt }}</strong> cores — what the
-  negotiator at this tier currently sees, summed across all groups'
-  EffectiveQuota. The (idle/unmatched capacity) row is the gap between
-  pool size and what's actually running.
+  Pool size: <strong>{{ tier_total|fmt }}</strong> cores (negotiator's
+  total, summed across all groups' <code>EffectiveQuota</code>).
+  Groups are currently consuming <strong>{{ total_used|fmt }}</strong>
+  cores in total.
 </p>
 
 <table class="data-table compact">
   <thead><tr>
     <th title="Accounting group">Group</th>
-    <th title="Static fraction set in HTCondor (GROUP_QUOTA_DYNAMIC). With SurplusPolicy=byquota groups can exceed this by absorbing idle siblings' shares.">Config Share</th>
+    <th title="Static fraction set in HTCondor (GROUP_QUOTA_DYNAMIC_*)">Config Share</th>
     <th title="Weighted resources (cores) the group is running right now">Cores Used</th>
     <th title="Cores Used / Pool Size">% of Pool</th>
-    <th title="Group's total weighted demand (idle + running). If much larger than Cores Used, the group has unmet demand and is being throttled by the negotiator.">Requested</th>
-    <th title="Group's fair-share Priority — exponentially-decayed EMA of recent usage * PriorityFactor. LOWER is better (served first). HIGHER means heavy recent usage and the group will be deprioritized for surplus.">Priority</th>
-    <th title="Admin-set multiplier on the priority. Identical across groups here (100) so it doesn't differentiate them.">PF</th>
-    <th title="Priority / PriorityFactor — approximates recent decayed usage in cores. The negotiator compares these between groups when deciding surplus distribution.">Eff. Prio</th>
-    <th title="Lifetime weighted consumption since BeginUsageTime. Cumulative; does NOT drive surplus decisions (the decayed Priority does).">Lifetime Usage</th>
+    <th title="Expected share under pure byquota: this group's ConfigQuota divided by the sum of demanding groups' ConfigQuotas. Only computed for groups whose Requested exceeds their EffectiveQuota (i.e. they actually want surplus).">Expected</th>
+    <th title="Actual / Expected. < 1 means the group is getting less than byquota would predict — flagged red below 0.85. Could be matchmaking failure, time-throttle, or another constraint not visible to gwmsmon. > 1 means it's absorbing some underserved group's missed share.">Fulfillment</th>
+    <th title="Group's total weighted demand (idle + running)">Requested</th>
     <th>Surplus Policy</th>
   </tr></thead>
   <tbody>
   {% for r in rows %}
-  <tr{% if r.is_idle_row %} style="color:var(--text-muted);font-style:italic"{% endif %}>
-    {% if r.is_idle_row or r.ConfigQuota is none %}
-    <td>{{ r.group }}</td>
-    {% else %}
-    <td><a href="/globalview/group/{{ r.group }}">{{ r.group }}</a></td>
-    {% endif %}
+  <tr>
+    <td>
+      {% if r.ConfigQuota is none %}{{ r.group }}{% else %}<a href="/globalview/group/{{ r.group }}">{{ r.group }}</a>{% endif %}
+    </td>
     <td>{% if r.ConfigQuota is none %}—{% else %}{{ "%.2f%%"|format(r.ConfigQuota * 100) }}{% endif %}</td>
     <td>{{ r.used|fmt }}</td>
     <td>{{ "%.2f%%"|format(r.pct) }}</td>
+    <td>{% if r.expected_pct is none %}—{% else %}{{ "%.2f%%"|format(r.expected_pct) }}{% endif %}</td>
+    <td{% if r.fulfillment is not none and r.fulfillment < 0.85 %} style="color:#c0392b;font-weight:600"{% endif %}>
+      {% if r.fulfillment is none %}—{% else %}{{ "%.2f"|format(r.fulfillment) }}{% endif %}
+    </td>
     <td>{% if r.Requested is none %}—{% else %}{{ r.Requested|int|fmt }}{% endif %}</td>
-    <td>{% if r.Priority is none %}—{% else %}{{ r.Priority|int|fmt }}{% endif %}</td>
-    <td>{% if r.PriorityFactor is none %}—{% else %}{{ "%.0f"|format(r.PriorityFactor) }}{% endif %}</td>
-    <td>{% if r.EffectivePriority is none %}—{% else %}{{ r.EffectivePriority|int|fmt }}{% endif %}</td>
-    <td>{% if r.AccumulatedUsage is none %}—{% else %}{{ r.AccumulatedUsage|int|fmt }}{% endif %}</td>
     <td>{{ r.SurplusPolicy }}</td>
   </tr>
   {% endfor %}
   </tbody>
-  <tfoot>
-  <tr style="font-weight:600;border-top:2px solid var(--border)">
-    <td>Total</td>
-    <td>100.00%</td>
-    <td>{{ tier_total|fmt }}</td>
-    <td>100.00%</td>
-    <td colspan="6"></td>
-  </tr>
-  </tfoot>
 </table>
 
 <details class="section" data-section="tier_explainer">
   <summary><h2>How to read this</h2></summary>
   <div style="color:var(--text-muted);font-size:0.9em;max-width:900px">
   <p>
-    <strong>Config Share</strong> is the static fraction set in HTCondor.
-    Quotas at a tier sum to 100%. With <code>SurplusPolicy=byquota</code>
-    and <code>GROUP_AUTOREGROUP=True</code>, a group can exceed its
-    static share by absorbing siblings' idle quota.
+    <strong>Config Share</strong> is the static fraction the admin set
+    in HTCondor. Shares at a tier sum to 100%.
   </p>
   <p>
     <strong>Cores Used / % of Pool</strong> is what the group is
-    actually running right now (sum of its users'
+    actually running right now (sum of users'
     <code>WeightedResourcesUsed</code>).
   </p>
   <p>
-    <strong>Requested</strong> is the group's total weighted demand —
-    idle plus running. If <em>Requested ≫ Cores Used</em> the group has
-    unmet demand and is being throttled by the negotiator. If
-    <em>Requested ≈ Cores Used</em> the group is demand-limited (it
-    could grab more but has nothing to schedule).
+    <strong>Expected</strong> is the share <em>pure byquota</em> would
+    give this group:
+    <code>ConfigQuota / sum(ConfigQuota of demanding groups)</code>.
+    A group is "demanding" if its <code>Requested</code> exceeds its
+    <code>EffectiveQuota</code> — i.e. it actually wants more than its
+    base share. Non-demanding groups release their quota as surplus.
   </p>
   <p>
-    <strong>Priority / Eff. Prio</strong> is the group's fair-share
-    Priority. It's an exponentially-decayed EMA of recent usage,
-    multiplied by <strong>PF</strong> (PriorityFactor). LOWER is
-    better — the negotiator serves low-priority groups first. A group
-    that's been hammering the pool recently has a high Priority; it
-    decays back over time (PRIORITY_HALFLIFE).
+    <strong>Fulfillment</strong> is <code>actual / expected</code>:
+  </p>
+  <ul>
+    <li><code>≈ 1.0</code>: getting roughly what byquota predicts.</li>
+    <li><code>&lt; 0.85</code> (red): underserved. Could be matchmaking
+    failure (jobs' requirements don't fit available slots), time-throttle,
+    or a negotiator-config constraint not visible here. The signal
+    flags the symptom — diagnosing the cause needs deeper inspection
+    of the negotiator (NegotiatorLog, slot inventory).</li>
+    <li><code>&gt; 1</code>: absorbing some underserved group's missed
+    share. Not bad in itself; the pool is conserved so what one group
+    is missing, others are picking up.</li>
+  </ul>
+  <p>
+    <strong>Requested</strong> is total weighted demand (idle +
+    running), straight from the accounting ad.
   </p>
   <p>
-    <strong>Lifetime Usage</strong> is cumulative since the group's
-    BeginUsageTime (often years ago). It does NOT drive surplus
-    decisions — only the decayed Priority does. A group can have low
-    lifetime usage but a high current Priority (and vice-versa).
+    <strong>(unclaimed slots)</strong> is a real count from
+    <code>condor_status</code>: startds at this tier in <code>State ==
+    "Unclaimed"</code>. These are slots the negotiator could match
+    right now but no job has claimed them. A large unclaimed row
+    together with a low Fulfillment for some group means real
+    matchmaking headroom exists.
   </p>
   <p>
-    Between-group surplus distribution depends on the negotiator's
-    config (<code>GROUP_SORT_EXPR</code>, <code>GROUP_AUTOREGROUP</code>,
-    per-group <code>SurplusPolicy</code>) which isn't visible from the
-    accounting ads. Pure quota-proportional and pure priority-proportional
-    are bracketing extremes; the actual share-out is somewhere between
-    and depends on those settings.
+    <strong>(other: timing skew, ungrouped, …)</strong> is whatever's
+    left of <code>Pool − Σ Cores Used − unclaimed</code>. Comes from
+    the EffectiveQuota and WeightedResourcesUsed snapshots being from
+    slightly different moments, slots in transit between matches, or
+    users with no accounting group.
+  </p>
+  <p>
+    Caveat: <em>pure byquota</em> is the model the per-group
+    <code>SurplusPolicy=byquota</code> setting claims. The negotiator's
+    actual algorithm also depends on
+    <code>GROUP_AUTOREGROUP</code>, <code>GROUP_SORT_EXPR</code>,
+    per-cycle time caps, and so on — Fulfillment shows the deviation
+    but doesn't explain its cause.
   </p>
   </div>
 </details>

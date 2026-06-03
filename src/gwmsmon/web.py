@@ -422,10 +422,12 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         share, cores currently used, and that group's share of the
         tier's total resources.
 
-        Sum of per-group "Cores Used" doesn't equal pool size — the
-        difference is idle/unmatched capacity that the negotiator can
-        hand out but no group is currently consuming. We surface that
-        as an explicit row so the column sums to the pool size."""
+        Fulfillment column compares the actual share against the share
+        pure byquota would predict — if a group is "demanding" (its
+        Requested exceeds EffectiveQuota), its expected share is its
+        ConfigQuota divided by the sum of demanding groups' ConfigQuotas.
+        Fulfillment < 1 flags an underserved group regardless of cause
+        (matchmaking failure, time-throttle, hidden constraint)."""
         basedir = cfg.get("globalview", "basedir")
         accounting = _load_json(basedir, "accounting.json")
         tier_groups = accounting.get("groups", {}).get(tier)
@@ -439,23 +441,39 @@ def create_app(config_path="/etc/gwmsmon.conf"):
                                 + int(u.get("WeightedResourcesUsed", 0)))
         tier_total = sum(g.get("EffectiveQuota", 0)
                          for g in tier_groups.values())
+
+        # A group is "demanding surplus" if it wants more than its base
+        # EffectiveQuota. Those groups split the byquota surplus pool
+        # in proportion to their ConfigQuota.
+        demanding = {
+            gname for gname, ginfo in tier_groups.items()
+            if ginfo.get("Requested", 0) > ginfo.get("EffectiveQuota", 0)
+        }
+        sum_demanding_cq = sum(
+            tier_groups[g].get("ConfigQuota", 0) for g in demanding)
+
         rows = []
         for gname, ginfo in tier_groups.items():
             used = used_by_group.get(gname, 0)
-            pf = ginfo.get("PriorityFactor", 1) or 1
-            prio = ginfo.get("Priority", 0)
+            actual_share = (used / tier_total) if tier_total else 0
+            if gname in demanding and sum_demanding_cq > 0:
+                expected_share = (ginfo.get("ConfigQuota", 0)
+                                  / sum_demanding_cq)
+                fulfillment = (actual_share / expected_share
+                               if expected_share > 0 else None)
+            else:
+                expected_share = None
+                fulfillment = None
             rows.append({
                 "group": gname,
-                "is_idle_row": False,
                 "ConfigQuota": ginfo.get("ConfigQuota", 0),
                 "used": used,
-                "pct": (used / tier_total * 100) if tier_total else 0,
-                "SurplusPolicy": ginfo.get("SurplusPolicy", ""),
-                "Priority": prio,
-                "PriorityFactor": pf,
-                "EffectivePriority": prio / pf if pf else 0,
+                "pct": actual_share * 100,
+                "expected_pct": (expected_share * 100
+                                 if expected_share is not None else None),
+                "fulfillment": fulfillment,
                 "Requested": ginfo.get("Requested", 0),
-                "AccumulatedUsage": ginfo.get("AccumulatedUsage", 0),
+                "SurplusPolicy": ginfo.get("SurplusPolicy", ""),
             })
         # Groups present in users[] but missing from groups[] (ungrouped
         # users, etc.) — show them so the table accounts for everyone.
@@ -463,36 +481,65 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             if gname not in tier_groups and used > 0:
                 rows.append({
                     "group": f"(ungrouped: {gname or '<none>'})",
-                    "is_idle_row": False,
                     "ConfigQuota": None,
                     "used": used,
                     "pct": (used / tier_total * 100) if tier_total else 0,
-                    "SurplusPolicy": "",
-                    "Priority": None,
-                    "PriorityFactor": None,
-                    "EffectivePriority": None,
+                    "expected_pct": None,
+                    "fulfillment": None,
                     "Requested": None,
-                    "AccumulatedUsage": None,
+                    "SurplusPolicy": "",
                 })
         rows.sort(key=lambda r: -r["used"])
-        # Idle/unmatched capacity = pool size minus everything users
-        # are actually running. Always last row so the column sums to
-        # tier_total visually.
         total_used = sum(r["used"] for r in rows)
-        idle = max(0, int(round(tier_total)) - total_used)
-        if idle > 0:
+        # Gap = pool size − Σ cores used by groups. Split it into the
+        # measured unclaimed count (real idle slots from condor_status)
+        # vs whatever's left (timing skew, ungrouped, etc.).
+        gap = int(round(tier_total)) - total_used
+        unclaimed_info = accounting.get("unclaimed_by_tier", {}).get(tier)
+        if unclaimed_info and gap > 0:
+            unclaimed_cores = int(unclaimed_info.get("cores", 0))
+            unclaimed_slots = int(unclaimed_info.get("slots", 0))
+            # Don't claim more unclaimed than the gap itself — condor_status
+            # snapshot may include slots the negotiator doesn't currently
+            # account for. Clamp to gap.
+            shown_unclaimed = min(unclaimed_cores, gap)
             rows.append({
-                "group": "(idle / unmatched capacity)",
-                "is_idle_row": True,
+                "group": (f"(unclaimed slots: {unclaimed_slots:,})"
+                          if shown_unclaimed > 0 else
+                          "(unclaimed slots)"),
                 "ConfigQuota": None,
-                "used": idle,
-                "pct": (idle / tier_total * 100) if tier_total else 0,
-                "SurplusPolicy": "",
-                "Priority": None,
-                "PriorityFactor": None,
-                "EffectivePriority": None,
+                "used": shown_unclaimed,
+                "pct": ((shown_unclaimed / tier_total * 100)
+                        if tier_total else 0),
+                "expected_pct": None,
+                "fulfillment": None,
                 "Requested": None,
-                "AccumulatedUsage": None,
+                "SurplusPolicy": "",
+            })
+            other = gap - shown_unclaimed
+            if other > 0:
+                rows.append({
+                    "group": "(other: timing skew, ungrouped, …)",
+                    "ConfigQuota": None,
+                    "used": other,
+                    "pct": (other / tier_total * 100) if tier_total else 0,
+                    "expected_pct": None,
+                    "fulfillment": None,
+                    "Requested": None,
+                    "SurplusPolicy": "",
+                })
+        elif gap > 0:
+            # No condor_status data available — fall back to a single
+            # (unaccounted) row, honestly labeled.
+            rows.append({
+                "group": "(unaccounted)",
+                "ConfigQuota": None,
+                "used": gap,
+                "pct": (gap / tier_total * 100) if tier_total else 0,
+                "expected_pct": None,
+                "fulfillment": None,
+                "Requested": None,
+                "SurplusPolicy": "",
             })
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
@@ -502,6 +549,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             view_cfg=VIEWS["globalview"],
             tier=tier,
             tier_total=int(round(tier_total)),
+            total_used=int(round(total_used)),
             rows=rows,
             updated=updated,
             freshness=_freshness(updated),

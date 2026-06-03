@@ -372,6 +372,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
         acct_users = accounting.get("users", {})
         tier_order = ["CERN", "T1", "US_T2", "nonUS_T2_T3"]
         tier_rows = []
+        sum_used = sum_total = 0
         for tier in tier_order:
             tier_groups = acct_groups.get(tier, {})
             used = sum(int(u.get("WeightedResourcesUsed", 0))
@@ -380,24 +381,41 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             tier_total = sum(g.get("EffectiveQuota", 0)
                              for g in tier_groups.values())
             pct = (used / tier_total * 100) if tier_total else 0
+            # Expected share under pure byquota at this tier:
+            # group's ConfigQuota / sum of demanding groups' ConfigQuotas.
+            # Only defined if THIS group is demanding at this tier.
+            this_g = tier_groups.get(name, {})
+            this_is_demanding = (
+                this_g.get("Requested", 0)
+                > this_g.get("EffectiveQuota", 0))
+            sum_demanding_cq = sum(
+                gi.get("ConfigQuota", 0)
+                for gi in tier_groups.values()
+                if gi.get("Requested", 0) > gi.get("EffectiveQuota", 0))
+            if this_is_demanding and sum_demanding_cq > 0:
+                expected_pct = (this_g.get("ConfigQuota", 0)
+                                / sum_demanding_cq) * 100
+                fulfillment = (pct / expected_pct
+                               if expected_pct > 0 else None)
+            else:
+                expected_pct = None
+                fulfillment = None
             tier_rows.append({
                 "tier": tier,
                 "used": used,
                 "tier_total": int(round(tier_total)),
                 "pct": pct,
+                "expected_pct": expected_pct,
+                "fulfillment": fulfillment,
             })
-
-        # Per-tier user priority data
-        acct_users = accounting.get("users", {})
-        tier_users = {}
-        for tier in tier_order:
-            tier_user_list = [
-                u for u in acct_users.get(tier, [])
-                if u.get("group") == name
-            ]
-            tier_user_list.sort(key=lambda u: -u.get("ResourcesUsed", 0))
-            if tier_user_list:
-                tier_users[tier] = tier_user_list
+            sum_used += used
+            sum_total += int(round(tier_total))
+        # Bottom "Total" row aggregating across tiers
+        tier_total_row = {
+            "used": sum_used,
+            "tier_total": sum_total,
+            "pct": (sum_used / sum_total * 100) if sum_total else 0,
+        }
 
         summary = _load_json(basedir, "summary.json")
         updated = summary.get("updated", 0)
@@ -410,7 +428,7 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             group_totals=group_totals,
             users=users,
             tier_rows=tier_rows,
-            tier_users=tier_users,
+            tier_total_row=tier_total_row,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,

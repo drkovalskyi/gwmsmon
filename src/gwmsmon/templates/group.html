@@ -31,9 +31,12 @@
 <details class="section" open data-section="globalview_group_tiers">
   <summary><h2>Resource usage by Tier</h2></summary>
   <p style="color:var(--text-muted);font-size:0.9em;margin:0 0 8px 0">
-    Cores currently used by this group at each tier, and the fraction
-    of the tier's total capacity that represents. Click a tier to see
-    how all groups share that tier.
+    Cores this group is using at each tier vs the tier's total capacity.
+    <strong>Expected</strong> is the share pure byquota would predict
+    (this group's ConfigQuota over the sum of demanding groups' at that
+    tier); <strong>Fulfillment</strong> is the actual share divided by
+    expected — &lt; 1 means underserved at that tier. Click a tier
+    name to drill into the per-group breakdown.
   </p>
   <table class="data-table compact">
     <thead><tr>
@@ -41,6 +44,8 @@
       <th data-sort="num">Cores Used</th>
       <th data-sort="num">Tier Total</th>
       <th data-sort="num">% of Tier</th>
+      <th data-sort="num">Expected</th>
+      <th data-sort="num">Fulfillment</th>
     </tr></thead>
     <tbody>
     {% for row in tier_rows %}
@@ -49,41 +54,25 @@
       <td>{{ row.used|fmt }}</td>
       <td>{{ row.tier_total|fmt }}</td>
       <td>{{ "%.2f%%"|format(row.pct) }}</td>
+      <td>{% if row.expected_pct is none %}—{% else %}{{ "%.2f%%"|format(row.expected_pct) }}{% endif %}</td>
+      <td{% if row.fulfillment is not none and row.fulfillment < 0.85 %} style="color:#c0392b;font-weight:600"{% endif %}>
+        {% if row.fulfillment is none %}—{% else %}{{ "%.2f"|format(row.fulfillment) }}{% endif %}
+      </td>
     </tr>
     {% endfor %}
     </tbody>
-  </table>
-</details>
-
-{% for tier, tusers in tier_users.items() %}
-<details class="section" open data-section="globalview_group_prio_{{ tier }}">
-  <summary><h2>Priority — {{ tier }} ({{ tusers|length }})</h2></summary>
-  <div class="table-scroll">
-  <table class="data-table sortable" data-sort-default="3:desc">
-    <thead><tr>
-      <th>User</th>
-      <th data-sort="num">Prio Factor</th>
-      <th data-sort="num">Priority</th>
-      <th data-sort="num">Resources</th>
-      <th data-sort="num">Weighted</th>
-      <th data-sort="num">Limit</th>
-    </tr></thead>
-    <tbody>
-    {% for u in tusers %}
-    <tr>
-      <td title="{{ u.name }}">{{ u.name }}</td>
-      <td>{{ u.PriorityFactor|fmt }}</td>
-      <td>{{ u.Priority|int|fmt }}</td>
-      <td>{{ u.ResourcesUsed|int|fmt }}</td>
-      <td>{{ u.WeightedResourcesUsed|int|fmt }}</td>
-      <td>{{ u.SubmitterLimit|int|fmt }}</td>
+    <tfoot>
+    <tr style="font-weight:600;border-top:2px solid var(--border)">
+      <td>Total</td>
+      <td>{{ tier_total_row.used|fmt }}</td>
+      <td>{{ tier_total_row.tier_total|fmt }}</td>
+      <td>{{ "%.2f%%"|format(tier_total_row.pct) }}</td>
+      <td>—</td>
+      <td>—</td>
     </tr>
-    {% endfor %}
-    </tbody>
+    </tfoot>
   </table>
-  </div>
 </details>
-{% endfor %}
 
 <details class="section" open data-section="globalview_group_users">
   <summary><h2>Active Users ({{ users|length }})</h2></summary>

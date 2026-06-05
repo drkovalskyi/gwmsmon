@@ -32,6 +32,32 @@ def _safe_path(basedir, untrusted):
         abort(404)
     return resolved
 
+# HTCondor HoldReasonCode → human label. Used by the per-schedd
+# Service Jobs panel to annotate held-job hold counts. Codes per the
+# HTCondor docs (https://htcondor.readthedocs.io/) — leaving unknown
+# codes as "unknown" rather than guessing.
+_HOLD_REASON_NAMES = {
+    1: "user request",
+    3: "job policy expression",
+    4: "exec failure",
+    5: "unable to init job",
+    6: "transient error",
+    7: "stdout/stderr open failed",
+    8: "input file transfer failed",
+    9: "output file transfer failed",
+    10: "execution exceeded limits",
+    11: "exit code policy",
+    12: "starter exception",
+    13: "non-job resource limit",
+    14: "memory exceeded",
+    16: "system",
+    17: "image-size limit",
+    21: "submission ban",
+    22: "input/output sandbox",
+    26: "schedd activation",
+    32: "post-script failed",
+}
+
 # View registry — all views share the same page structure,
 # differing only in data and display options.
 VIEWS = {
@@ -773,6 +799,34 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             key=lambda kv: (-kv[1].get("Running", 0),
                             -kv[1].get("MatchingIdle", 0)),
         )
+        # Service-job aux (DAGMan, scheduler-other, local, held by
+        # reason, long idle). Each per-cycle, no historical data.
+        aux = schedd_data.get("_aux", {})
+        # Held-by-reason rows, sorted by count desc. Annotate with the
+        # admin-readable name from HOLD_REASON_NAMES.
+        held_rows = []
+        for code, count in sorted(
+                aux.get("held_by_reason", {}).items(),
+                key=lambda kv: -kv[1]):
+            held_rows.append({
+                "code": code,
+                "name": _HOLD_REASON_NAMES.get(int(code) if code.isdigit()
+                                              else -1,
+                                              "unknown"),
+                "count": count,
+            })
+        # DAGMan instances, sorted by NodesFailed desc then NodesTotal desc.
+        dagman_rows = sorted(
+            aux.get("dagman", {}).values(),
+            key=lambda d: (-(d.get("nodes_failed", 0)),
+                           -(d.get("nodes_total", 0))))
+        # Service-job summary counts.
+        service_counts = {
+            "dagman_count": aux.get("dagman_count", 0),
+            "scheduler_other": aux.get("scheduler_other", 0),
+            "local_universe": aux.get("local_universe", 0),
+            "long_idle": aux.get("long_idle", 0),
+        }
         updated = summary.get("updated", 0)
         return render_template(
             "schedd.html",
@@ -781,6 +835,9 @@ def create_app(config_path="/etc/gwmsmon.conf"):
             name=name,
             schedd_data=schedd_data,
             tasks=tasks,
+            held_rows=held_rows,
+            dagman_rows=dagman_rows,
+            service_counts=service_counts,
             updated=updated,
             freshness=_freshness(updated),
             updated_ts=updated,

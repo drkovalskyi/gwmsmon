@@ -61,6 +61,21 @@ JOB_PROJECTION = [
     "Iwd",
     "CMS_SubmissionTool",
     "CMS_WMTool",
+    # Service-job / DAGMan / hold/idle detail for /poolview/schedd/<n>
+    "ClusterId",
+    "ProcId",
+    "QDate",
+    "HoldReasonCode",
+    "DAG_NodesTotal",
+    "DAG_NodesDone",
+    "DAG_NodesQueued",
+    "DAG_NodesReady",
+    "DAG_NodesFailed",
+    "DAG_NodesUnready",
+    "DAG_NodesPrerun",
+    "DAG_NodesPostrun",
+    "DAG_InRecovery",
+    "DAG_Status",
 ]
 
 # Projection for history queries (exit code collection, SPEC 4.5)
@@ -107,10 +122,26 @@ def get_schedds(pool, extra_collectors=None):
     health is a dict with TotalRunningJobs, TotalIdleJobs, TotalHeldJobs,
     MaxJobsRunning from the schedd ad itself.
     """
-    projection = ["Name", "MyAddress", "CMSGWMS_Type",
-                   "ScheddIpAddr", "Machine",
-                   "TotalRunningJobs", "TotalIdleJobs",
-                   "TotalHeldJobs", "MaxJobsRunning"]
+    projection = [
+        "Name", "MyAddress", "CMSGWMS_Type",
+        "ScheddIpAddr", "Machine",
+        # Job counts
+        "TotalRunningJobs", "TotalIdleJobs", "TotalHeldJobs",
+        "MaxJobsRunning",
+        "TotalSubmitters", "TotalOwners",
+        # Schedd-process health
+        "RecentDaemonCoreDutyCycle", "ShadowsRunning",
+        "MonitorSelfAge", "MonitorSelfImageSize", "MonitorSelfCPUUsage",
+        "MonitorSelfResidentSetSize",
+        # Throughput
+        "RecentJobsStarted", "RecentJobsCompleted",
+        "RecentJobsExited", "JobsStarted", "JobsCompleted",
+        # File transfer queue
+        "TransferQueueNumWaitingToUpload",
+        "TransferQueueNumWaitingToDownload",
+        # Build info / liveness
+        "CondorVersion", "CondorPlatform",
+    ]
     all_ads = {}
     for coll_addr in [pool] + (extra_collectors or []):
         try:
@@ -125,14 +156,21 @@ def get_schedds(pool, extra_collectors=None):
             log.warning("failed to query collector %s for schedds",
                         coll_addr, exc_info=True)
     result = []
+    fields = (
+        "TotalRunningJobs", "TotalIdleJobs", "TotalHeldJobs",
+        "MaxJobsRunning", "TotalSubmitters", "TotalOwners",
+        "RecentDaemonCoreDutyCycle", "ShadowsRunning",
+        "MonitorSelfAge", "MonitorSelfImageSize", "MonitorSelfCPUUsage",
+        "MonitorSelfResidentSetSize",
+        "RecentJobsStarted", "RecentJobsCompleted",
+        "RecentJobsExited", "JobsStarted", "JobsCompleted",
+        "TransferQueueNumWaitingToUpload",
+        "TransferQueueNumWaitingToDownload",
+        "CondorVersion", "CondorPlatform",
+    )
     for name, ad in all_ads.items():
         stype = classad_to_python(ad.get("CMSGWMS_Type", "unknown"))
-        health = {
-            "TotalRunningJobs": classad_to_python(ad.get("TotalRunningJobs", 0)) or 0,
-            "TotalIdleJobs": classad_to_python(ad.get("TotalIdleJobs", 0)) or 0,
-            "TotalHeldJobs": classad_to_python(ad.get("TotalHeldJobs", 0)) or 0,
-            "MaxJobsRunning": classad_to_python(ad.get("MaxJobsRunning", 0)) or 0,
-        }
+        health = {f: classad_to_python(ad.get(f, 0)) or 0 for f in fields}
         result.append((ad, name, stype, health))
     return result
 

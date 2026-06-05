@@ -308,8 +308,10 @@ def _worker_process_chunk(chunk):
 
     Replicates the parent's per-job loop in full: universe bucketing,
     per-schedd task breakdown, DESIRED_Sites parsing, all 3 view
-    aggregators. Returns (partial_snap, univ_counts, site_cpus_cat,
-    counters).
+    aggregators. Also collects per-schedd service-job detail
+    (DAGMan instances, scheduler-other, local, held-by-reason,
+    long-idle) for the /poolview/schedd/<name> page. Returns
+    (partial_snap, univ_counts, site_cpus_cat, counters).
     """
     _reset_worker_signals()
     state = _PARENT_STATE
@@ -318,6 +320,8 @@ def _worker_process_chunk(chunk):
     site_cpus_cat = {}
     univ_counts = {}
     n_jobs = n_vanilla = n_gv = n_pv = n_av = 0
+    now_ts = int(time.time())
+    LONG_IDLE_SEC = 3600  # idle ≥ 1h flagged as "long idle"
     start, end = chunk
 
     for i in range(start, end):
@@ -344,6 +348,57 @@ def _worker_process_chunk(chunk):
             sd_uc[bucket][1] += 1
         elif status == 5:
             sd_uc[bucket][2] += 1
+
+        # Per-schedd service-job aux — for /poolview/schedd/<name>.
+        # Collected for ALL universes/statuses (not gated by vanilla).
+        sd_aux = _ensure(snap["poolview"], "schedds",
+                         schedd_name, "_aux")
+        for k in ("dagman_count", "scheduler_other",
+                  "local_universe", "long_idle"):
+            sd_aux.setdefault(k, 0)
+        sd_aux.setdefault("held_by_reason", {})
+        sd_aux.setdefault("dagman", {})
+
+        if universe == 7:
+            # DAGMan instance OR other scheduler-universe driver
+            dag_total = job.get("DAG_NodesTotal")
+            if dag_total is not None:
+                sd_aux["dagman_count"] += 1
+                cid = job.get("ClusterId", 0)
+                pid = job.get("ProcId", 0)
+                sd_aux["dagman"][f"{cid}.{pid}"] = {
+                    "cluster": cid,
+                    "proc": pid,
+                    "owner": job.get("Owner") or "?",
+                    "iwd": job.get("Iwd") or "",
+                    "q_date": job.get("QDate") or 0,
+                    "status": status,
+                    "dag_status": job.get("DAG_Status") or 0,
+                    "in_recovery": bool(job.get("DAG_InRecovery")),
+                    "nodes_total": dag_total or 0,
+                    "nodes_done": job.get("DAG_NodesDone") or 0,
+                    "nodes_queued": job.get("DAG_NodesQueued") or 0,
+                    "nodes_ready": job.get("DAG_NodesReady") or 0,
+                    "nodes_unready": job.get("DAG_NodesUnready") or 0,
+                    "nodes_prerun": job.get("DAG_NodesPrerun") or 0,
+                    "nodes_postrun": job.get("DAG_NodesPostrun") or 0,
+                    "nodes_failed": job.get("DAG_NodesFailed") or 0,
+                }
+            else:
+                sd_aux["scheduler_other"] += 1
+        elif universe == 12:
+            sd_aux["local_universe"] += 1
+
+        if status == 5:
+            code = job.get("HoldReasonCode") or 0
+            key = str(int(code)) if isinstance(code, (int, float)) else "0"
+            sd_aux["held_by_reason"][key] = (
+                sd_aux["held_by_reason"].get(key, 0) + 1)
+        elif status == 1:
+            qdate = job.get("QDate") or 0
+            if qdate and (now_ts - int(qdate)) > LONG_IDLE_SEC:
+                sd_aux["long_idle"] += 1
+
         if universe != 5:
             continue
         n_vanilla += 1
@@ -990,14 +1045,24 @@ class State:
                 sd["SubmitterIdle"] = ad.get("IdleJobs", 0)
                 sd["SubmitterHeld"] = ad.get("HeldJobs", 0)
 
-        # Schedd health ads → poolview
+        # Schedd health ads → poolview. Pull every field the query
+        # surfaced; the template decides what to render.
         for name, health in summary_ads.get("schedd_health", {}).items():
             sd = _ensure(snap["poolview"], "schedds", name)
-            sd["TotalRunningJobs"] = health.get("TotalRunningJobs", 0)
-            sd["TotalIdleJobs"] = health.get("TotalIdleJobs", 0)
-            sd["TotalHeldJobs"] = health.get("TotalHeldJobs", 0)
-            sd["MaxJobsRunning"] = health.get("MaxJobsRunning", 0)
             sd["CMSGWMS_Type"] = health.get("CMSGWMS_Type", "unknown")
+            for k in (
+                "TotalRunningJobs", "TotalIdleJobs", "TotalHeldJobs",
+                "MaxJobsRunning", "TotalSubmitters", "TotalOwners",
+                "RecentDaemonCoreDutyCycle", "ShadowsRunning",
+                "MonitorSelfAge", "MonitorSelfImageSize",
+                "MonitorSelfCPUUsage", "MonitorSelfResidentSetSize",
+                "RecentJobsStarted", "RecentJobsCompleted",
+                "RecentJobsExited", "JobsStarted", "JobsCompleted",
+                "TransferQueueNumWaitingToUpload",
+                "TransferQueueNumWaitingToDownload",
+                "CondorVersion", "CondorPlatform",
+            ):
+                sd[k] = health.get(k, 0)
             max_jobs = sd["MaxJobsRunning"]
             if max_jobs > 0:
                 sd["PercentUse"] = round(

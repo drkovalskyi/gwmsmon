@@ -17,7 +17,7 @@ UMask=0022
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=gwmsmon-collect
-MemoryMax=35G
+MemoryMax=50G
 TasksMax=128
 # Watchdog: collector must ping WATCHDOG=1 within this window or
 # systemd restarts the service. Catches Pool.map / Process.join hangs

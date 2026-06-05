@@ -31,6 +31,141 @@
   </div>
 </div>
 
+<details class="section" open data-section="poolview_schedd_health">
+  <summary><h2>Schedd Health</h2></summary>
+  <table class="data-table compact" style="max-width:760px">
+    <tbody>
+    {% set duty = schedd_data.get('RecentDaemonCoreDutyCycle', 0) %}
+    <tr>
+      <td style="font-weight:600" title="Fraction of time the schedd process is busy. >0.9 sustained = saturated.">Duty Cycle (recent)</td>
+      <td{% if duty > 0.9 %} style="color:#c0392b;font-weight:600"{% elif duty > 0.7 %} style="color:#e67e22;font-weight:600"{% endif %}>{{ "%.2f"|format(duty) }}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600" title="Active shadow processes — one per running job">Shadows running</td>
+      <td>{{ schedd_data.get('ShadowsRunning', 0)|fmt }} / {{ schedd_data.get('MaxJobsRunning', 0)|fmt }}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600">Submitters / Owners</td>
+      <td>{{ schedd_data.get('TotalSubmitters', 0)|fmt }} / {{ schedd_data.get('TotalOwners', 0)|fmt }}</td>
+    </tr>
+    {% set age = schedd_data.get('MonitorSelfAge', 0) %}
+    <tr>
+      <td style="font-weight:600" title="Time since the schedd process started">Uptime</td>
+      <td>{% if age > 86400 %}{{ (age // 86400)|int }}d {{ ((age % 86400) // 3600)|int }}h{% elif age > 3600 %}{{ (age // 3600)|int }}h {{ ((age % 3600) // 60)|int }}m{% else %}{{ (age // 60)|int }}m{% endif %}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600">Memory (RSS)</td>
+      <td>{{ (schedd_data.get('MonitorSelfResidentSetSize', 0) / 1024)|round(1) }} MB</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600">CPU usage</td>
+      <td>{{ "%.1f"|format(schedd_data.get('MonitorSelfCPUUsage', 0)) }}%</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600" title="Jobs started in the most recent 5-min window">Jobs started (recent)</td>
+      <td>{{ schedd_data.get('RecentJobsStarted', 0)|fmt }}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600" title="Jobs that finished running in the most recent 5-min window">Jobs completed (recent)</td>
+      <td>{{ schedd_data.get('RecentJobsCompleted', 0)|fmt }}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600">Jobs completed (lifetime)</td>
+      <td>{{ schedd_data.get('JobsCompleted', 0)|fmt }}</td>
+    </tr>
+    {% set tu = schedd_data.get('TransferQueueNumWaitingToUpload', 0) %}
+    {% set td = schedd_data.get('TransferQueueNumWaitingToDownload', 0) %}
+    <tr>
+      <td style="font-weight:600" title="File-transfer queue depth — large numbers suggest I/O bottleneck">Transfer queue (up / down)</td>
+      <td{% if tu + td > 100 %} style="color:#e67e22;font-weight:600"{% endif %}>{{ tu|fmt }} / {{ td|fmt }}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600">HTCondor version</td>
+      <td>{{ schedd_data.get('CondorVersion', '') }}</td>
+    </tr>
+    </tbody>
+  </table>
+</details>
+
+<details class="section" open data-section="poolview_schedd_service">
+  <summary><h2>Service Jobs</h2></summary>
+  <table class="data-table compact" style="max-width:560px">
+    <tbody>
+    <tr>
+      <td style="font-weight:600" title="Scheduler-universe jobs running condor_dagman">DAGMan instances</td>
+      <td>{{ service_counts.dagman_count|fmt }}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600" title="Scheduler-universe jobs that aren't DAGMan (e.g. CRAB task masters)">Scheduler-universe (other)</td>
+      <td>{{ service_counts.scheduler_other|fmt }}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600" title="Local-universe helper jobs running on the schedd host itself (DAG post-scripts, monitoring)">Local-universe</td>
+      <td>{{ service_counts.local_universe|fmt }}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600" title="Idle (JobStatus=1) jobs that have been queued > 1h">Idle &gt; 1h</td>
+      <td{% if service_counts.long_idle > 1000 %} style="color:#e67e22;font-weight:600"{% endif %}>{{ service_counts.long_idle|fmt }}</td>
+    </tr>
+    </tbody>
+  </table>
+  {% if held_rows %}
+  <h3 style="margin-top:14px">Held jobs by reason</h3>
+  <table class="data-table compact" style="max-width:560px">
+    <thead><tr>
+      <th title="HTCondor HoldReasonCode">Code</th>
+      <th>Reason</th>
+      <th data-sort="num">Count</th>
+    </tr></thead>
+    <tbody>
+    {% for h in held_rows %}
+    <tr>
+      <td>{{ h.code }}</td>
+      <td>{{ h.name }}</td>
+      <td>{{ h.count|fmt }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</details>
+
+{% if dagman_rows %}
+<details class="section" open data-section="poolview_schedd_dagman">
+  <summary><h2>DAGMan Workflows ({{ dagman_rows|length }})</h2></summary>
+  <div class="table-scroll">
+  <table class="data-table sortable compact" data-sort-default="5:desc">
+    <thead><tr>
+      <th>Owner</th>
+      <th>Iwd (workflow dir)</th>
+      <th data-sort="num" title="Nodes that have completed successfully">Done</th>
+      <th data-sort="num" title="Nodes queued/submitted to the pool">Q</th>
+      <th data-sort="num" title="Nodes ready to submit (DAGMan hasn't yet)">Ready</th>
+      <th data-sort="num" title="Failed nodes — red flag">Failed</th>
+      <th data-sort="num" title="Nodes still waiting on parents">Unready</th>
+      <th data-sort="num">Total</th>
+      <th title="DAGMan recovering from restart — slow phase, no new submissions">Recovery?</th>
+    </tr></thead>
+    <tbody>
+    {% for d in dagman_rows %}
+    <tr>
+      <td>{{ d.owner }}</td>
+      <td style="font-size:0.85em;color:var(--text-muted)" title="{{ d.iwd }}">{{ d.iwd[-60:] if d.iwd|length > 60 else d.iwd }}</td>
+      <td>{{ d.nodes_done|fmt }}</td>
+      <td>{{ d.nodes_queued|fmt }}</td>
+      <td>{{ d.nodes_ready|fmt }}</td>
+      <td{% if d.nodes_failed > 0 %} style="color:#c0392b;font-weight:600"{% endif %}>{{ d.nodes_failed|fmt }}</td>
+      <td>{{ d.nodes_unready|fmt }}</td>
+      <td>{{ d.nodes_total|fmt }}</td>
+      <td>{% if d.in_recovery %}<span style="color:#e67e22;font-weight:600">yes</span>{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endif %}
+
 <div class="graphs-row">
   <div class="chart" data-src="/poolview/tsdata/schedd/{{ name }}" data-interval="hourly" data-chart-type="simple"></div>
   <div class="chart" data-src="/poolview/tsdata/schedd/{{ name }}" data-interval="daily" data-chart-type="simple"></div>

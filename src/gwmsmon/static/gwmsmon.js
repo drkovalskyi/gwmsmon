@@ -522,28 +522,37 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     return {data: data, tMin: timestamps[0], tMax: timestamps[timestamps.length - 1]};
   }
 
-  // Extend aligned data to fill right edge (repeat last value to xMax).
-  // Left edge is never padded — lines start where real data begins.
+  // Extend aligned data to fill both edges so the chart doesn't leave
+  // empty horizontal space when the series starts late or ends early.
+  //   right edge: repeat the last value through xMax
+  //   left edge: prepend a 0 at xMin
+  // For activity counters (CpusInUse, MatchingIdle, Running) the 0 is
+  // semantically correct — those metrics WERE 0 before the workflow
+  // began running. For other series ratios are recomputed from the
+  // padded counter columns, so they pick up the same shape.
   function extendToEdges(aligned, xMin, xMax) {
     if (!aligned || !aligned.data.length) return aligned;
     var ts = aligned.data[0];
     var n = ts.length;
+    var addLeft = ts[0] > xMin ? 1 : 0;
     var addRight = ts[n - 1] < xMax ? 1 : 0;
-    if (!addRight) return aligned;
-    var newLen = n + 1;
+    if (!addLeft && !addRight) return aligned;
+    var newLen = n + addLeft + addRight;
     var newData = [new Float64Array(newLen)];
-    for (var j = 0; j < n; j++) newData[0][j] = ts[j];
-    newData[0][n] = xMax;
+    if (addLeft) newData[0][0] = xMin;
+    for (var j = 0; j < n; j++) newData[0][j + addLeft] = ts[j];
+    if (addRight) newData[0][n + addLeft] = xMax;
     for (var i = 1; i < aligned.data.length; i++) {
       var s = aligned.data[i];
       var ns = new Float64Array(newLen);
-      for (var j = 0; j < n; j++) ns[j] = s[j];
-      ns[n] = s[n - 1]; // repeat last value
+      if (addLeft) ns[0] = 0;
+      for (var j = 0; j < n; j++) ns[j + addLeft] = s[j];
+      if (addRight) ns[n + addLeft] = s[n - 1];
       newData.push(ns);
     }
     aligned.data = newData;
-    aligned.tMin = aligned.tMin;
-    aligned.tMax = xMax;
+    aligned.tMin = addLeft ? xMin : aligned.tMin;
+    aligned.tMax = addRight ? xMax : aligned.tMax;
     return aligned;
   }
 

@@ -498,6 +498,19 @@ class State:
         # now_site at the previous flush. When unchanged across cycles,
         # window cutoffs are identical and only dirty wfs need rewrite.
         self._last_flush_now_site = 0
+        # Per-view set of timeseries entities that got a new sample this
+        # cycle. flush_timeseries writes only these instead of all
+        # ~200K entities — lets us flush every cycle cheaply rather
+        # than every 5, so a SIGKILL (OOM / watchdog escalation /
+        # deploy timeout) loses at most one cycle of data instead of
+        # up to 25 min. Cleared after each successful flush.
+        self._dirty_ts = {v: set() for v in
+                          ("prodview", "analysisview", "globalview",
+                           "poolview", "factoryview")}
+        # Set to True after maintenance() rewrites series in place;
+        # flush_timeseries then writes every entity once before going
+        # back to incremental mode.
+        self._ts_full_flush_needed = True
 
     def update(self, jobs, summary_ads, factory_data, accounting_ads=None,
                unclaimed_by_tier=None):
@@ -2619,11 +2632,16 @@ class State:
                     ts[key] = {"t": [], "v": []}
                 ts[key]["t"].append(now)
                 ts[key]["v"].append(val)
+        # Mark for incremental flush.
+        self._dirty_ts.setdefault(view, set()).add(entity)
 
     # --- Step 6: Time-series maintenance ---
 
     def maintenance(self):
         """Downsample, prune old points, clean up inactive entities."""
+        # Maintenance rewrites series in place; force full flush next
+        # cycle so all the changes hit disk.
+        self._ts_full_flush_needed = True
         now = time.time()
         cutoff_full = now - FULL_RES_SECONDS
         cutoff_hourly = now - HOURLY_RES_SECONDS
@@ -2974,7 +2992,15 @@ class State:
                 })
 
     def flush_timeseries(self, cfg):
-        """Write time-series JSON files to disk."""
+        """Write time-series JSON files to disk.
+
+        Incremental by default: writes only the entities that gained a
+        new sample since the last flush (tracked in self._dirty_ts). On
+        the first call after restart, and after maintenance() rewrites
+        series in place, does a full flush of every entity. Clears the
+        dirty set on success."""
+        full = self._ts_full_flush_needed
+        n_total = n_written = 0
         for view in ("prodview", "analysisview", "globalview",
                       "poolview", "factoryview"):
             basedir = cfg.get(view, "basedir")
@@ -2984,7 +3010,16 @@ class State:
             os.makedirs(ts_dir, exist_ok=True)
 
             entities = self.timeseries.get(view, {})
-            for entity, series in entities.items():
+            n_total += len(entities)
+            if full:
+                to_write = list(entities)
+            else:
+                to_write = list(self._dirty_ts.get(view, set())
+                                & set(entities))
+            for entity in to_write:
+                series = entities.get(entity)
+                if series is None:
+                    continue
                 safe_name = entity.replace("/", "_").replace(":", "_")
                 path = os.path.join(ts_dir, f"{safe_name}.json")
                 _atomic_json(path, {
@@ -2992,6 +3027,13 @@ class State:
                     "entity": entity,
                     "series": series,
                 })
+                n_written += 1
+        log.info("flush_timeseries: wrote %d/%d entities (%s)",
+                 n_written, n_total, "full" if full else "incremental")
+        # Reset state after successful flush.
+        self._ts_full_flush_needed = False
+        for v in self._dirty_ts:
+            self._dirty_ts[v].clear()
 
     def restore(self, cfg):
         """Load time-series from JSON files on startup."""

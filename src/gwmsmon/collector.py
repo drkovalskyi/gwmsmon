@@ -83,7 +83,9 @@ from gwmsmon.status_history import StatusHistory
 log = logging.getLogger("gwmsmon")
 
 COOLDOWN = 60  # seconds between cycles (fixed initially)
-TS_FLUSH_INTERVAL = 5  # flush time-series every N cycles
+TS_FLUSH_INTERVAL = 1  # flush time-series every cycle (incremental — only
+                       # dirty entities; the first call after restart and
+                       # the cycle after maintenance() do a full flush)
 MAINTENANCE_INTERVAL = 60  # run maintenance every N cycles
 
 _shutdown = False

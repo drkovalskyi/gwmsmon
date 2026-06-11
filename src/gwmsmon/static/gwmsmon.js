@@ -489,18 +489,41 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
   // Build aligned uPlot data arrays from parallel-array series.
   // Returns {data: [...], tMin: N, tMax: N} or null.
   function buildAligned(series, keys, cutoff) {
-    // Collect all unique timestamps >= cutoff across all keys
+    // Collect all unique timestamps >= cutoff across all keys.
+    // Also remember the most-recent sample {t, v} with t < cutoff per
+    // key — that's the anchor to interpolate the left edge from when
+    // the chart window starts before any in-window measurement (e.g.
+    // a 24h chart whose first in-window point is 2h after xMin, but
+    // the series has 7d of older data).
     var tSet = {};
-    keys.forEach(function(k) {
+    var lastBefore = keys.map(function(k) {
       var pts = series[k] || {t:[],v:[]};
+      var p = null;
       for (var i = 0; i < pts.t.length; i++) {
-        if (pts.t[i] >= cutoff) tSet[pts.t[i]] = true;
+        if (pts.t[i] < cutoff) {
+          p = {t: pts.t[i], v: pts.v[i]};
+        } else {
+          tSet[pts.t[i]] = true;
+        }
       }
+      return p;
     });
     var timestamps = Object.keys(tSet).map(Number).sort(function(a,b){return a-b;});
-    if (!timestamps.length) return null;
+    if (!timestamps.length) {
+      // No data in the window. If we have a prior value, render a
+      // flat line at that value across the whole chart so the user
+      // still sees the recent state instead of an empty chart.
+      var hasPrior = lastBefore.some(function(p) { return p != null; });
+      if (!hasPrior) return null;
+      var dataFlat = [new Float64Array([cutoff])];
+      lastBefore.forEach(function(p) {
+        dataFlat.push(new Float64Array([p != null ? p.v : NaN]));
+      });
+      return {data: dataFlat, tMin: cutoff, tMax: cutoff,
+              lastBefore: lastBefore};
+    }
 
-    // Build lookup per key
+    // Build lookup per key (only timestamps inside the window)
     var lookups = keys.map(function(k) {
       var m = {};
       var pts = series[k] || {t:[],v:[]};
@@ -519,17 +542,20 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       }
       data.push(arr);
     });
-    return {data: data, tMin: timestamps[0], tMax: timestamps[timestamps.length - 1]};
+    return {data: data, tMin: timestamps[0],
+            tMax: timestamps[timestamps.length - 1],
+            lastBefore: lastBefore};
   }
 
-  // Extend aligned data to fill both edges so the chart doesn't leave
-  // empty horizontal space when the series starts late or ends early.
-  //   right edge: repeat the last value through xMax
-  //   left edge: prepend a 0 at xMin
-  // For activity counters (CpusInUse, MatchingIdle, Running) the 0 is
-  // semantically correct — those metrics WERE 0 before the workflow
-  // began running. For other series ratios are recomputed from the
-  // padded counter columns, so they pick up the same shape.
+  // Extend aligned data to fill both edges so the chart spans its full
+  // time window:
+  //   left edge:  insert a point at xMin, linearly interpolated
+  //               between the most-recent sample before the window
+  //               (aligned.lastBefore, captured by buildAligned) and
+  //               the first in-window sample. Only when no earlier
+  //               sample exists at all — the series truly has no
+  //               history — fall back to 0.
+  //   right edge: repeat the last in-window value through xMax.
   function extendToEdges(aligned, xMin, xMax) {
     if (!aligned || !aligned.data.length) return aligned;
     var ts = aligned.data[0];
@@ -537,6 +563,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var addLeft = ts[0] > xMin ? 1 : 0;
     var addRight = ts[n - 1] < xMax ? 1 : 0;
     if (!addLeft && !addRight) return aligned;
+    var prior = aligned.lastBefore || [];
     var newLen = n + addLeft + addRight;
     var newData = [new Float64Array(newLen)];
     if (addLeft) newData[0][0] = xMin;
@@ -545,7 +572,7 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     for (var i = 1; i < aligned.data.length; i++) {
       var s = aligned.data[i];
       var ns = new Float64Array(newLen);
-      if (addLeft) ns[0] = 0;
+      if (addLeft) ns[0] = interpAtEdge(prior[i - 1], ts, s, xMin);
       for (var j = 0; j < n; j++) ns[j + addLeft] = s[j];
       if (addRight) ns[n + addLeft] = s[n - 1];
       newData.push(ns);
@@ -554,6 +581,20 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     aligned.tMin = addLeft ? xMin : aligned.tMin;
     aligned.tMax = addRight ? xMax : aligned.tMax;
     return aligned;
+  }
+
+  // Value at xMin for a series being left-extended: linear
+  // interpolation between the last sample before the window (prior =
+  // {t, v} or null) and the first non-NaN in-window sample; 0 when
+  // there is no earlier sample.
+  function interpAtEdge(prior, ts, vals, xMin) {
+    if (prior == null) return 0;
+    var j = 0;
+    while (j < vals.length && isNaN(vals[j])) j++;
+    if (j >= vals.length) return prior.v;
+    var dt = ts[j] - prior.t;
+    if (dt <= 0) return prior.v;
+    return prior.v + (vals[j] - prior.v) * (xMin - prior.t) / dt;
   }
 
   // Downsample aligned data arrays by averaging into fixed-size time buckets.
@@ -598,7 +639,8 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
     var out = [outTs];
     for (var s = 0; s < nSeries; s++) out.push(outSeries[s]);
-    return {data: out, tMin: aligned.tMin, tMax: aligned.tMax};
+    return {data: out, tMin: aligned.tMin, tMax: aligned.tMax,
+            lastBefore: aligned.lastBefore};
   }
 
   // Compute cores/job ratio array from cpus and jobs arrays
@@ -1036,17 +1078,23 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     var xMin = xMax - interval;
     var xFmt = interval > 2*86400 ? fmtDateSplits : fmtTimeSplits;
 
-    // Collect all timestamps across all blocks
+    // Collect all timestamps across all blocks; remember per block the
+    // most-recent sample before the window for left-edge interpolation
     var tSet = {};
+    var lastBefore = {};
     BLOCKS.forEach(function(b) {
       var s = (blockData[b] || {})[metric] || {t:[],v:[]};
       for (var i = 0; i < s.t.length; i++) {
         if (s.t[i] >= xMin) tSet[s.t[i]] = true;
+        else lastBefore[b] = {t: s.t[i], v: s.v[i]};
       }
     });
     var timestamps = Object.keys(tSet).map(Number).sort(function(a,b){return a-b;});
     if (!timestamps.length) { el.style.display = 'none'; return; }
-    // Extend right edge only — don't pad left to avoid 0-start
+    // Extend to both edges: left point at xMin (interpolated per block
+    // below), right edge repeats the last known value through xMax.
+    var addLeft = timestamps[0] > xMin ? 1 : 0;
+    if (addLeft) timestamps.unshift(xMin);
     if (timestamps[timestamps.length - 1] < xMax) timestamps.push(xMax);
 
     // Build per-block raw value arrays aligned to timestamps
@@ -1056,8 +1104,19 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       var m = {};
       for (var i = 0; i < s.t.length; i++) m[s.t[i]] = s.v[i];
       var arr = new Float64Array(timestamps.length);
-      for (var i = 0; i < timestamps.length; i++) {
-        // For the extended point, repeat the last known value
+      if (addLeft) {
+        // Interpolate the xMin point between the last sample before
+        // the window and the first in-window sample (0 if no history)
+        var j = 1;
+        while (j < timestamps.length && m[timestamps[j]] == null) j++;
+        var p = lastBefore[b];
+        if (p == null) arr[0] = 0;
+        else if (j >= timestamps.length || timestamps[j] <= p.t) arr[0] = p.v;
+        else arr[0] = p.v + (m[timestamps[j]] - p.v) * (xMin - p.t) /
+                      (timestamps[j] - p.t);
+      }
+      for (var i = addLeft; i < timestamps.length; i++) {
+        // For extended/missing points, repeat the last known value
         arr[i] = m[timestamps[i]] != null ? m[timestamps[i]] :
                  (i > 0 ? arr[i-1] : 0);
       }

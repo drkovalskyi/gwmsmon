@@ -71,16 +71,19 @@ def test_prune_drops_old_points(freeze_time, tmp_path):
     h = StatusHistory()
     base = 1_700_000_000.0
 
-    # Insert a point older than 24h directly into the series
-    h.series["cycle_time"]["24h"]["t"] = [base - 25 * 3600,
+    # Retention is the 24h chart window + 2 bins (26h): the 25h-old
+    # point survives as the left-edge interpolation anchor, the
+    # 27h-old point is dropped.
+    h.series["cycle_time"]["24h"]["t"] = [base - 27 * 3600,
+                                          base - 25 * 3600,
                                           base - 1 * 3600]
-    h.series["cycle_time"]["24h"]["v"] = [50.0, 99.0]
+    h.series["cycle_time"]["24h"]["v"] = [40.0, 50.0, 99.0]
 
     freeze_time(base)
     h.prune()
     pts = h.series["cycle_time"]["24h"]
-    assert pts["t"] == [base - 1 * 3600]
-    assert pts["v"] == [99.0]
+    assert pts["t"] == [base - 25 * 3600, base - 1 * 3600]
+    assert pts["v"] == [50.0, 99.0]
 
 
 def test_restore_round_trip(freeze_time, tmp_path):

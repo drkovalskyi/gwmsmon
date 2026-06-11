@@ -25,9 +25,12 @@ log = logging.getLogger(__name__)
 
 TIERS = [
     # (name, bin_seconds, retention_seconds)
-    ("24h", 3600, 24 * 3600),
-    ("7d", 4 * 3600, 7 * 86400),
-    ("1y", 7 * 86400, 365 * 86400),
+    # Retention runs 2 bins past the chart window so the renderer
+    # always has an out-of-window anchor point for left-edge
+    # interpolation (instead of extrapolating the edge to 0).
+    ("24h", 3600, 24 * 3600 + 2 * 3600),
+    ("7d", 4 * 3600, 7 * 86400 + 8 * 3600),
+    ("1y", 7 * 86400, 365 * 86400 + 14 * 86400),
 ]
 
 METRICS = ("cycle_time", "rss_mb", "state_size_mb")

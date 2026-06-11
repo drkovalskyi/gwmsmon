@@ -34,9 +34,13 @@ def _negotiator_tier(neg_name):
     from gwmsmon.query import negotiator_tier
     return negotiator_tier(neg_name)
 
-# Retention: full resolution for 3.5 days, hourly for 365 days
+# Retention: full resolution for 3.5 days, hourly for 30 days
 FULL_RES_SECONDS = int(3.5 * 86400)  # 302400
 HOURLY_RES_SECONDS = 30 * 86400      # 2592000
+# Keep hourly points this much past the longest chart window (30 days)
+# so left-edge interpolation on monthly charts always has an anchor
+# point outside the plotting range.
+RETENTION_MARGIN_SECONDS = 2 * 86400
 PRUNE_INACTIVE_DAYS = 30
 EXIT_CODE_WINDOW = 7 * 86400       # retain 7 days of buckets
 EXIT_CODE_BUCKET = 600              # 10-minute bucket resolution
@@ -511,6 +515,11 @@ class State:
         # flush_timeseries then writes every entity once before going
         # back to incremental mode.
         self._ts_full_flush_needed = True
+        # Timestamp of the previous _append_timeseries cycle and the
+        # views that received appends this cycle — used to place
+        # opening/closing zeros around silent gaps in sparse series.
+        self._ts_prev_now = 0
+        self._ts_views_updated = set()
 
     def update(self, jobs, summary_ads, factory_data, accounting_ads=None,
                unclaimed_by_tier=None):
@@ -2496,6 +2505,7 @@ class State:
         """
         now = int(self.updated)
         snap = self.snapshot
+        self._ts_views_updated.clear()
 
         # prodview
         self._ts_append("prodview", "_summary", snap["prodview"]["totals"],
@@ -2621,19 +2631,58 @@ class State:
                 "Held": site_data.get("Held", 0),
             }, now)
 
+        self._ts_close_silent(now)
+
+    def _ts_close_silent(self, now):
+        """Closing zeros: a key sampled last cycle but not this one went
+        to zero (storage is sparse — zeros are never appended, and
+        finished entities vanish from the snapshot entirely). Record
+        one explicit 0 so charts don't extrapolate the last non-zero
+        value across the gap, then let the key go silent. Views with
+        no appends this cycle are skipped — absence there means a
+        collection hiccup, not a real drop to zero."""
+        prev_now = self._ts_prev_now
+        if prev_now and prev_now < now:
+            for view in self._ts_views_updated:
+                dirty = self._dirty_ts.setdefault(view, set())
+                for entity, series in self.timeseries.get(view, {}).items():
+                    for pts in series.values():
+                        if (pts["t"] and pts["v"][-1]
+                                and prev_now <= pts["t"][-1] < now):
+                            pts["t"].append(now)
+                            pts["v"].append(0)
+                            dirty.add(entity)
+        self._ts_prev_now = now
+
     def _ts_append(self, view, entity, counts, now):
-        """Append a data point for each non-zero counter."""
+        """Append a data point for each non-zero counter.
+
+        Storage is sparse — zero values are skipped — but when a key
+        that was silent at the previous cycle becomes active again, an
+        opening 0 is inserted at the previous cycle's timestamp so the
+        plotted line ramps up over one cycle instead of climbing
+        slowly across the whole silent gap. (The matching closing 0
+        when a key goes silent is appended by the sweep at the end of
+        _append_timeseries.)
+        """
         if not any(counts.values()):
             return  # sparse: skip entirely inactive entities
         ts = _ensure(self.timeseries, view, entity)
+        prev_now = self._ts_prev_now
         for key, val in counts.items():
             if val:
-                if key not in ts:
-                    ts[key] = {"t": [], "v": []}
-                ts[key]["t"].append(now)
-                ts[key]["v"].append(val)
+                pts = ts.get(key)
+                if pts is None:
+                    pts = ts[key] = {"t": [], "v": []}
+                elif (prev_now and pts["t"]
+                        and pts["t"][-1] < prev_now < now):
+                    pts["t"].append(prev_now)
+                    pts["v"].append(0)
+                pts["t"].append(now)
+                pts["v"].append(val)
         # Mark for incremental flush.
         self._dirty_ts.setdefault(view, set()).add(entity)
+        self._ts_views_updated.add(view)
 
     # --- Step 6: Time-series maintenance ---
 
@@ -2644,7 +2693,7 @@ class State:
         self._ts_full_flush_needed = True
         now = time.time()
         cutoff_full = now - FULL_RES_SECONDS
-        cutoff_hourly = now - HOURLY_RES_SECONDS
+        cutoff_hourly = now - HOURLY_RES_SECONDS - RETENTION_MARGIN_SECONDS
 
         for view, entities in self.timeseries.items():
             dead_entities = []

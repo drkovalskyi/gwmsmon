@@ -1879,20 +1879,32 @@ class State:
                     "codes": wcodes,
                 }
 
-            # View-level efficiency (all workflows combined)
+            # View-level efficiency: the wall-cpu-weighted aggregate of
+            # the per-site efficiency, summed over real sites only. The
+            # no-site bucket ("Unknown"/"unknown" — schedd service jobs
+            # and unattributable jobs) is excluded so it can't drag the
+            # headline. update_exit_codes now drops such jobs at ingest;
+            # excluding the site key here also keeps any legacy Unknown
+            # buckets still in the rolling window out of the average,
+            # so the headline is correct immediately instead of after a
+            # 7d drain. This is the same Σcpu/Σ(wall×cpus) over sites
+            # the frontend recomputes when the site list is filtered.
             now_bucket = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
             view_eff = {}
             for wlabel, wsec in EXIT_CODE_WINDOWS.items():
                 cutoff = now_bucket - wsec
                 cpu = wall_cpus = slot_ok = slot_all = 0
-                for wf_b in self.efficiency.get(view, {}).values():
-                    for ts, b in wf_b.items():
-                        if ts < cutoff:
+                for wf_sites in self.efficiency_by_site.get(view, {}).values():
+                    for site, buckets in wf_sites.items():
+                        if site in ("Unknown", "unknown"):
                             continue
-                        cpu += b.get("cpu", 0)
-                        wall_cpus += b.get("wall_cpus", 0)
-                        slot_ok += b.get("slot_ok", 0)
-                        slot_all += b.get("slot_all", 0)
+                        for ts, b in buckets.items():
+                            if ts < cutoff:
+                                continue
+                            cpu += b.get("cpu", 0)
+                            wall_cpus += b.get("wall_cpus", 0)
+                            slot_ok += b.get("slot_ok", 0)
+                            slot_all += b.get("slot_all", 0)
                 view_eff[wlabel] = {
                     "running_eff": round(cpu / wall_cpus, 4) if wall_cpus else 0,
                     "processing_eff": round(slot_ok / slot_all, 4) if slot_all else 0,
@@ -2234,6 +2246,14 @@ class State:
                         if wall_cpus else 0,
                         "processing_eff": round(slot_ok / slot_all, 4)
                         if slot_all else 0,
+                        # Raw weights (seconds) so the frontend can
+                        # recompute the wall-cpu-weighted aggregate over
+                        # a filtered subset of sites: Σcpu/Σwall_cpus,
+                        # Σslot_ok/Σslot_all.
+                        "cpu": round(cpu),
+                        "wall_cpus": round(wall_cpus),
+                        "slot_ok": round(slot_ok),
+                        "slot_all": round(slot_all),
                     }
                 entry["efficiency"] = site_eff
                 site_ec_out[site] = entry

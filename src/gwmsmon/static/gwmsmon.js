@@ -191,6 +191,36 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     });
   }
 
+  // Recompute the "7d avg" CPU/Proc efficiency headline as the
+  // wall-cpu-weighted aggregate over the currently-visible site rows:
+  // Σcpu/Σ(wall×cpus) and Σslot_ok/Σslot_all. On load this sums every
+  // real site — the no-site "Unknown" bucket is not a site row, so it
+  // is excluded by construction. When the site list is filtered the
+  // headline follows the visible subset. (Under a workflow filter the
+  // visible sites are those the workflows touch; per-(workflow,site)
+  // 7d weighting is a later step — see notes.)
+  function updateSiteEff7d() {
+    if (!sitesTable) return;
+    var cpu = 0, wall = 0, slotOk = 0, slotAll = 0;
+    sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
+      if (row.style.display === 'none') return;
+      cpu     += parseFloat(row.dataset.cpu)     || 0;
+      wall    += parseFloat(row.dataset.wall)    || 0;
+      slotOk  += parseFloat(row.dataset.slotok)  || 0;
+      slotAll += parseFloat(row.dataset.slotall) || 0;
+    });
+    var el;
+    if ((el = document.getElementById('stat-cpu-eff-7d'))) {
+      el.textContent = wall ? (cpu / wall * 100).toFixed(1) + '%' : '';
+      el.className = (wall && cpu / wall < 0.5) ? 'warn' : '';
+    }
+    if ((el = document.getElementById('stat-proc-eff-7d'))) {
+      el.textContent = slotAll ? (slotOk / slotAll * 100).toFixed(1) + '%' : '';
+      el.className = (slotAll && slotOk / slotAll < 0.8) ? 'warn' : '';
+    }
+  }
+  updateSiteEff7d();
+
   function applyFilters() {
     var wfFilter = wfInput ? wfInput.value.toLowerCase() : '';
     var siteFilter = siteInput ? siteInput.value.toLowerCase() : '';
@@ -405,6 +435,9 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     // Re-sort tables after cell values changed
     resortTable(wfTable);
     resortTable(sitesTable);
+
+    // Refresh the 7d efficiency headline for the visible site set.
+    updateSiteEff7d();
   }
 
   if (wfInput) wfInput.addEventListener('input', applyFilters);

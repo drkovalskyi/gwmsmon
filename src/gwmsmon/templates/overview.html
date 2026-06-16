@@ -29,7 +29,7 @@
   </tr></thead>
   <tbody>
   <tr>
-    <td style="font-weight:600">Current</td>
+    <td style="font-weight:600">Current (1h)</td>
     <td style="text-align:right" id="stat-running">{{ totals.get('Running', 0)|fmt }}</td>
     <td style="text-align:right" id="stat-idle">{{ totals.get('MatchingIdle', 0)|fmt }}</td>
     <td style="text-align:right" id="stat-cpus-use">{{ totals.get('CpusInUse', 0)|fmt }}</td>
@@ -235,7 +235,8 @@
     {% for name, data in sites %}
     {% set sec = site_exit_codes.get(name, {}).get('7d', {}) %}
     {% set seff = site_exit_codes.get(name, {}).get('efficiency', {}).get('7d', {}) %}
-    <tr data-name="{{ name }}" data-done="{{ sec.get('total', 0) }}" data-fail="{{ sec.get('failures', 0) }}" data-cpu-eff="{{ seff.get('running_eff', 0) }}" data-proc-eff="{{ seff.get('processing_eff', 0) }}" data-cpu="{{ seff.get('cpu', 0) }}" data-wall="{{ seff.get('wall_cpus', 0) }}" data-slotok="{{ seff.get('slot_ok', 0) }}" data-slotall="{{ seff.get('slot_all', 0) }}">
+    {% set seff1h = site_exit_codes.get(name, {}).get('efficiency', {}).get('1h', {}) %}
+    <tr data-name="{{ name }}" data-done="{{ sec.get('total', 0) }}" data-fail="{{ sec.get('failures', 0) }}" data-cpu-eff="{{ seff.get('running_eff', 0) }}" data-proc-eff="{{ seff.get('processing_eff', 0) }}" data-cpu="{{ seff.get('cpu', 0) }}" data-wall="{{ seff.get('wall_cpus', 0) }}" data-slotok="{{ seff.get('slot_ok', 0) }}" data-slotall="{{ seff.get('slot_all', 0) }}" data-cpu1h="{{ seff1h.get('cpu', 0) }}" data-wall1h="{{ seff1h.get('wall_cpus', 0) }}" data-slotok1h="{{ seff1h.get('slot_ok', 0) }}" data-slotall1h="{{ seff1h.get('slot_all', 0) }}">
       <td><a href="/{{ view }}/site/{{ name }}">{{ name }}</a></td>
       <td>{{ data.get('Running', 0)|fmt }}</td>
       <td>{{ data.get('MatchingIdle', 0)|fmt }}</td>

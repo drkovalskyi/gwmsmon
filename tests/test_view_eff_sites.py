@@ -66,3 +66,8 @@ def test_headline_excludes_unknown_and_emits_weights(tmp_path):
     assert mit["slot_ok"] == 900
     assert mit["slot_all"] == 1000
     assert mit["running_eff"] == 0.8
+    # 1h carries the same weights so the "Current (1h)" headline is
+    # filter-reactive too (the seeded bucket falls in the 1h window).
+    mit_1h = sec["sites"]["T2_US_MIT"]["efficiency"]["1h"]
+    assert mit_1h["cpu"] == 800
+    assert mit_1h["wall_cpus"] == 1000

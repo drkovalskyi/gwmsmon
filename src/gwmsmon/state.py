@@ -2947,12 +2947,14 @@ class State:
                 req_dir = os.path.join(basedir, req.replace("/", os.sep))
                 os.makedirs(req_dir, exist_ok=True)
                 req_sites = {}
-                for st_name, sites_data in subtasks.items():
-                    if st_name == "Summary" or st_name.startswith("_"):
-                        continue
-                    if not isinstance(sites_data, dict):
-                        continue
-                    for site_name, counts in sites_data.items():
+                if view == "analysisview":
+                    # analysisview workflows are 2-level:
+                    # wf -> {Summary|site: counts}. (prodview/globalview
+                    # are 3-level: wf -> subtask -> site -> counts.)
+                    # Walking the 3-level path here left site_index — and
+                    # thus cross_reference and the per-site detail files —
+                    # empty for analysisview.
+                    for site_name, counts in subtasks.items():
                         if site_name == "Summary" or site_name.startswith("_"):
                             continue
                         if not isinstance(counts, dict):
@@ -2960,6 +2962,20 @@ class State:
                         s = req_sites.setdefault(site_name, _zero_counts())
                         for k in s:
                             s[k] += counts.get(k, 0)
+                else:
+                    for st_name, sites_data in subtasks.items():
+                        if st_name == "Summary" or st_name.startswith("_"):
+                            continue
+                        if not isinstance(sites_data, dict):
+                            continue
+                        for site_name, counts in sites_data.items():
+                            if site_name == "Summary" or site_name.startswith("_"):
+                                continue
+                            if not isinstance(counts, dict):
+                                continue
+                            s = req_sites.setdefault(site_name, _zero_counts())
+                            for k in s:
+                                s[k] += counts.get(k, 0)
                 _atomic_json(os.path.join(req_dir, "detail.json"), {
                     "updated": self.updated,
                     "subtasks": {
@@ -2995,17 +3011,29 @@ class State:
             _atomic_json(os.path.join(basedir, "site_summary.json"),
                          site_summary_out)
 
-            # Cross-reference: request → {site: [R, I, C, P]}
+            # Cross-reference: entity → {site: [R, I, C, P]}, keyed by the
+            # overview table's entity (request for prodview, user for
+            # analysis/global — matching completion_cross_reference and
+            # the table's data-name). Multiple tasks of a user at a site
+            # are summed.
             cross_ref = {}
             for site_name, reqs in site_index.items():
                 for req, counts in reqs.items():
-                    cr = cross_ref.setdefault(req, {})
-                    cr[site_name] = [
-                        counts.get("Running", 0),
-                        counts.get("MatchingIdle", 0),
-                        counts.get("CpusInUse", 0),
-                        counts.get("CpusPending", 0),
-                    ]
+                    ent = req if view == "prodview" else req.split("/", 1)[0]
+                    cr = cross_ref.setdefault(ent, {})
+                    site_cr = cr.get(site_name)
+                    if site_cr is None:
+                        cr[site_name] = [
+                            counts.get("Running", 0),
+                            counts.get("MatchingIdle", 0),
+                            counts.get("CpusInUse", 0),
+                            counts.get("CpusPending", 0),
+                        ]
+                    else:
+                        site_cr[0] += counts.get("Running", 0)
+                        site_cr[1] += counts.get("MatchingIdle", 0)
+                        site_cr[2] += counts.get("CpusInUse", 0)
+                        site_cr[3] += counts.get("CpusPending", 0)
             _atomic_json(os.path.join(basedir, "cross_reference.json"),
                          cross_ref)
 

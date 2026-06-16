@@ -282,6 +282,19 @@ def test_flush_writes_summary_per_view(populated_state, tmp_path):
         assert "totals" in data
 
 
+def test_analysisview_cross_reference_keyed_by_user(populated_state, tmp_path):
+    """analysisview workflows are 2-level (wf -> site), so the cross-ref
+    build must walk one level shallower than prodview/globalview, and key
+    the result by user (matching the Users table) — not user/task."""
+    cfg = _make_cfg(tmp_path)
+    populated_state.flush_snapshot(cfg)
+    cr = json.loads(
+        (tmp_path / "analysisview" / "cross_reference.json").read_text())
+    assert "bob" in cr                       # keyed by user
+    assert "bob/bob_task" not in cr          # not by user/task
+    assert cr["bob"].get("T2_CH_CERN", [0])[0] == 1  # 1 running job
+
+
 def test_flush_writes_globalview_fairshare(populated_state, tmp_path):
     cfg = _make_cfg(tmp_path)
     populated_state.flush_snapshot(cfg)

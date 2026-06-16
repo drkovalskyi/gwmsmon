@@ -80,6 +80,7 @@ JOB_PROJECTION = [
 
 # Projection for history queries (exit code collection, SPEC 4.5)
 HISTORY_PROJECTION = [
+    "JobUniverse",
     "ExitCode",
     "ExitBySignal",
     "Chirp_WMCore_cmsRun_ExitCode",

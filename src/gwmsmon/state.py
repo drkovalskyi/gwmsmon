@@ -1233,6 +1233,14 @@ class State:
         errors = 0
         for job in history_jobs:
           try:
+            # Only vanilla-universe payload jobs (mirrors the live-job
+            # gate at universe != 5). Scheduler-universe (7) DAGMan
+            # bootstraps and local-universe (12) CRAB service jobs run
+            # on the schedd with no CMS site and ~0 CPU but large wall
+            # time; counting them buried real CPU efficiency under an
+            # "Unknown" site bucket and double-counted task completions.
+            if job.get("JobUniverse") != 5:
+                continue
             raw_exit = job.get("ExitCode")
             if raw_exit is None:
                 continue

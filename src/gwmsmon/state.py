@@ -2168,14 +2168,22 @@ class State:
             view_site_ec = {}
             site_codes_1h = {}  # {site: {code: count}} for 1h window
             site_codes_7d = {}  # {site: {code: count}} for 7d window
-            completion_xref = {}  # {wf: {site: [done_1h, fail_1h]}}
+            # Cross-reference keyed by the same entity the overview table
+            # uses (request for prodview, user for analysis/global) so the
+            # JS filter and the per-user efficiency column key off one
+            # value. Each (entity, site) entry carries 1h AND 7d weights:
+            #   [done1h, fail1h, cpu1h, wall1h, sok1h, sall1h,
+            #    done7d, fail7d, cpu7d, wall7d, sok7d, sall7d]
+            # Real sites only — the no-site bucket never enters.
+            completion_xref = {}
             cutoff_1h = now_site - EXIT_CODE_WINDOWS["1h"]
             cutoff_7d = now_site - EXIT_CODE_WINDOWS["7d"]
             view_cutoffs, view_oldest = _window_cutoffs(now_site)
             for wf, site_data in self.exit_codes_by_site.get(view, {}).items():
+                ent = wf if view == "prodview" else wf.split("/", 1)[0]
                 for site, buckets in site_data.items():
-                    wf_site_done = 0
-                    wf_site_fail = 0
+                    wf_site_done = wf_site_fail = 0
+                    wf_site_done7 = wf_site_fail7 = 0
                     sc7_dst = site_codes_7d.setdefault(site, {})
                     sc1_dst = site_codes_1h.setdefault(site, {})
                     site_view_dst = view_site_ec.setdefault(site, {})
@@ -2192,6 +2200,8 @@ class State:
                                 sw["total"] += tot
                                 sw["failures"] += fail
                         if ts >= cutoff_7d:
+                            wf_site_done7 += tot
+                            wf_site_fail7 += fail
                             for code, cnt in codes.items():
                                 sc7_dst[code] = sc7_dst.get(code, 0) + cnt
                         if ts >= cutoff_1h:
@@ -2200,22 +2210,35 @@ class State:
                                 wf_site_done += cnt
                                 if code != "0":
                                     wf_site_fail += cnt
-                    if wf_site_done:
-                        # Per-wf-per-site efficiency raw values for 1h
+                    if wf_site_done7 and site not in ("Unknown", "unknown"):
+                        # Per-(wf,site) efficiency weights, 1h and 7d.
                         eff_b = self.efficiency_by_site.get(
                             view, {}).get(wf, {}).get(site, {})
-                        cpu = wall_cpus = slot_ok = slot_all = 0
+                        c1 = w1 = o1 = a1 = 0
+                        c7 = w7 = o7 = a7 = 0
                         for ts, b in eff_b.items():
-                            if ts < cutoff_1h:
+                            if ts < cutoff_7d:
                                 continue
-                            cpu += b.get("cpu", 0)
-                            wall_cpus += b.get("wall_cpus", 0)
-                            slot_ok += b.get("slot_ok", 0)
-                            slot_all += b.get("slot_all", 0)
-                        completion_xref.setdefault(wf, {})[site] = [
-                            wf_site_done, wf_site_fail,
-                            round(cpu), round(wall_cpus),
-                            round(slot_ok), round(slot_all)]
+                            c7 += b.get("cpu", 0)
+                            w7 += b.get("wall_cpus", 0)
+                            o7 += b.get("slot_ok", 0)
+                            a7 += b.get("slot_all", 0)
+                            if ts >= cutoff_1h:
+                                c1 += b.get("cpu", 0)
+                                w1 += b.get("wall_cpus", 0)
+                                o1 += b.get("slot_ok", 0)
+                                a1 += b.get("slot_all", 0)
+                        vals = [wf_site_done, wf_site_fail,
+                                round(c1), round(w1), round(o1), round(a1),
+                                wf_site_done7, wf_site_fail7,
+                                round(c7), round(w7), round(o7), round(a7)]
+                        ent_sites = completion_xref.setdefault(ent, {})
+                        acc = ent_sites.get(site)
+                        if acc is None:
+                            ent_sites[site] = vals
+                        else:
+                            for i in range(12):
+                                acc[i] += vals[i]
             for site, site_wins in view_site_ec.items():
                 for w in site_wins.values():
                     w["failure_rate"] = (round(w["failures"] / w["total"], 4)

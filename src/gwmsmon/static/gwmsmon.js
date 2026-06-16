@@ -231,6 +231,37 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
   }
   updateHeadlineFromSites(true);
 
+  // Rewrite a workflow row's cells to a site-subset contribution.
+  // wc = [R,I,C,P]; comp = 12-el [1h done,fail,cpu,wall,sok,sall,
+  // 7d done,fail,cpu,wall,sok,sall]. Cell layout differs per view.
+  function updateWfRowCells(view, cells, wc, comp) {
+    function eff(num, den) { return den ? num / den : 0; }
+    if (view === 'prodview') {
+      // Name Prio R I C P Done Fail Fail% CpuEff ProcEff (1h subset)
+      cells[2].textContent = fmt(wc[0]); cells[3].textContent = fmt(wc[1]);
+      cells[4].textContent = fmt(wc[2]); cells[5].textContent = fmt(wc[3]);
+      if (cells[6]) cells[6].textContent = fmt(comp[0]);
+      if (cells[7]) cells[7].textContent = fmt(comp[1]);
+      if (cells[8]) {
+        cells[8].textContent = comp[0] ? (comp[1] / comp[0] * 100).toFixed(1) + '%' : '';
+        cells[8].className = (comp[0] && comp[1] / comp[0] > 0.05) ? 'warn' : '';
+      }
+      var ce = eff(comp[2], comp[3]), pe = eff(comp[4], comp[5]);
+      if (cells[9]) { cells[9].textContent = comp[0] ? (ce * 100).toFixed(1) + '%' : ''; cells[9].className = ce && ce < 0.5 ? 'warn' : ''; }
+      if (cells[10]) { cells[10].textContent = comp[0] ? (pe * 100).toFixed(1) + '%' : ''; cells[10].className = pe && pe < 0.8 ? 'warn' : ''; }
+    } else if (view === 'analysisview') {
+      // Name R I C P CpuEff(7d)
+      cells[1].textContent = fmt(wc[0]); cells[2].textContent = fmt(wc[1]);
+      cells[3].textContent = fmt(wc[2]); cells[4].textContent = fmt(wc[3]);
+      var ce7 = eff(comp[8], comp[9]);
+      if (cells[5]) { cells[5].textContent = comp[6] ? (ce7 * 100).toFixed(1) + '%' : ''; cells[5].className = ce7 && ce7 < 0.5 ? 'warn' : ''; }
+    } else {
+      // globalview: Name Group R I C P
+      cells[2].textContent = fmt(wc[0]); cells[3].textContent = fmt(wc[1]);
+      cells[4].textContent = fmt(wc[2]); cells[5].textContent = fmt(wc[3]);
+    }
+  }
+
   function applyFilters() {
     var wfFilter = wfInput ? wfInput.value.toLowerCase() : '';
     var siteFilter = siteInput ? siteInput.value.toLowerCase() : '';
@@ -249,41 +280,46 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
 
     // 2. Filter workflow rows: text match AND site match
     var visibleWfs = new Set();
-    var totals = {running: 0, idle: 0, cpusUse: 0, cpusPend: 0, count: 0, done: 0, fail: 0, cpu: 0, wallCpus: 0, slotOk: 0, slotAll: 0};
+    var totals = {running: 0, idle: 0, cpusUse: 0, cpusPend: 0, count: 0,
+                  done: 0, fail: 0, cpu: 0, wallCpus: 0, slotOk: 0, slotAll: 0,
+                  cpu7: 0, wall7: 0, slotOk7: 0, slotAll7: 0};
     wfTable.querySelectorAll('tbody tr').forEach(function(row) {
       var textMatch = !wfFilter || row.textContent.toLowerCase().indexOf(wfFilter) !== -1;
       var siteMatch = true;
       var name = row.dataset.name;
-      var wfCounts = null; // [R, I, C, P] per-site contribution
-      var wfComp = null;   // [done, fail, cpu, wall_cpus, slot_ok, slot_all]
-      if (matchingSites && crossRef) {
-        var wfSites = name ? crossRef[name] : null;
-        var cSites = completionXref && name && completionXref[name] ? completionXref[name] : {};
-        if (wfSites || Object.keys(cSites).length) {
-          siteMatch = false;
-          wfCounts = [0, 0, 0, 0];
-          wfComp = [0, 0, 0, 0, 0, 0];
-          // Accumulate live job counts
-          if (wfSites) {
-            for (var s in wfSites) {
-              if (matchingSites.has(s)) {
-                siteMatch = true;
-                var v = wfSites[s];
-                wfCounts[0] += v[0]; wfCounts[1] += v[1];
-                wfCounts[2] += v[2]; wfCounts[3] += v[3];
-              }
-            }
+      var cr = (crossRef && name) ? crossRef[name] : null;
+      var cx = (completionXref && name) ? completionXref[name] : null;
+      var wfCounts = null; // [R, I, C, P] over included sites
+      var wfComp = null;   // 12-el: 1h[done,fail,cpu,wall,sok,sall] + 7d[...]
+      // Build a site-subset contribution from the cross-references when
+      // any filter is active. matchingSites (set only under a site
+      // filter) restricts which sites count; otherwise all sites count
+      // (exact totals for a workflow/user filter).
+      if (anyFilter && (cr || cx)) {
+        wfCounts = [0, 0, 0, 0];
+        wfComp = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        var touched = false;
+        if (cr) {
+          for (var s in cr) {
+            if (matchingSites && !matchingSites.has(s)) continue;
+            touched = true;
+            var v = cr[s];
+            wfCounts[0] += v[0]; wfCounts[1] += v[1];
+            wfCounts[2] += v[2]; wfCounts[3] += v[3];
           }
-          // Accumulate completion counts (may include sites not in crossRef)
-          for (var s in cSites) {
-            if (matchingSites.has(s)) {
-              siteMatch = true;
-              for (var ci = 0; ci < 6; ci++) wfComp[ci] += cSites[s][ci] || 0;
-            }
-          }
-        } else {
-          siteMatch = false;
         }
+        if (cx) {
+          for (var s in cx) {
+            if (matchingSites && !matchingSites.has(s)) continue;
+            touched = true;
+            var cv = cx[s];
+            for (var ci = 0; ci < 12; ci++) wfComp[ci] += cv[ci] || 0;
+          }
+        }
+        if (matchingSites) siteMatch = touched;
+      } else if (matchingSites) {
+        // Site filter active but this row has no cross-ref data.
+        siteMatch = false;
       }
       var visible = textMatch && siteMatch;
       row.style.display = visible ? '' : 'none';
@@ -295,60 +331,41 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
         });
       }
 
-      // Update workflow row cells when site filter is active
+      // Rewrite row cells only under a site filter (subset view). Under
+      // a workflow-only filter the row keeps its own full values.
       var cells = row.querySelectorAll('td');
-      var n = cells.length;
-      // Detect if row has completion+efficiency columns (prodview: 11 cells with Prio)
-      var hasComp = row.dataset.done !== undefined;
       if (matchingSites && wfCounts) {
-        if (hasComp) {
-          // prodview: Name Prio R I C P Done Fail Fail% CpuEff ProcEff
-          cells[2].textContent = fmt(wfCounts[0]);
-          cells[3].textContent = fmt(wfCounts[1]);
-          cells[4].textContent = fmt(wfCounts[2]);
-          cells[5].textContent = fmt(wfCounts[3]);
-          cells[6].textContent = fmt(wfComp[0]);
-          cells[7].textContent = fmt(wfComp[1]);
-          cells[8].textContent = wfComp[0] ? (wfComp[1] / wfComp[0] * 100).toFixed(1) + '%' : '';
-          cells[8].className = (wfComp[0] && wfComp[1] / wfComp[0] > 0.05) ? 'warn' : '';
-          var cpuEff = wfComp[3] ? wfComp[2] / wfComp[3] : 0;
-          var procEff = wfComp[5] ? wfComp[4] / wfComp[5] : 0;
-          if (cells[9]) { cells[9].textContent = wfComp[0] ? (cpuEff * 100).toFixed(1) + '%' : ''; cells[9].className = cpuEff && cpuEff < 0.5 ? 'warn' : ''; }
-          if (cells[10]) { cells[10].textContent = wfComp[0] ? (procEff * 100).toFixed(1) + '%' : ''; cells[10].className = procEff && procEff < 0.8 ? 'warn' : ''; }
-        } else {
-          cells[n - 4].textContent = fmt(wfCounts[0]);
-          cells[n - 3].textContent = fmt(wfCounts[1]);
-          cells[n - 2].textContent = fmt(wfCounts[2]);
-          cells[n - 1].textContent = fmt(wfCounts[3]);
-        }
+        updateWfRowCells(view, cells, wfCounts, wfComp);
       } else if (!matchingSites) {
-        // Restore original values
         row._origCells.forEach(function(v, i) { if (cells[i]) cells[i].innerHTML = v; });
       }
 
       if (visible) {
         if (name) visibleWfs.add(name);
         totals.count++;
-        if (wfCounts) {
+        // Counts: subset by site only under a site filter; otherwise use
+        // the row's own full counts (robust even if crossRef is sparse).
+        if (matchingSites && wfCounts) {
           totals.running += wfCounts[0]; totals.idle += wfCounts[1];
           totals.cpusUse += wfCounts[2]; totals.cpusPend += wfCounts[3];
-          if (wfComp) {
-            totals.done += wfComp[0]; totals.fail += wfComp[1];
-            totals.cpu += wfComp[2]; totals.wallCpus += wfComp[3];
-            totals.slotOk += wfComp[4]; totals.slotAll += wfComp[5];
-          }
         } else {
           totals.running += parseInt(row.dataset.running) || 0;
           totals.idle += parseInt(row.dataset.idle) || 0;
           totals.cpusUse += parseInt(row.dataset.cpusUse) || 0;
           totals.cpusPend += parseInt(row.dataset.cpusPend) || 0;
+        }
+        // Completions + efficiency: exact per-(entity,site) weights when
+        // available (site-subset under a site filter, else all the
+        // entity's sites); fall back to the row's own counts otherwise.
+        if (wfComp) {
+          totals.done += wfComp[0]; totals.fail += wfComp[1];
+          totals.cpu += wfComp[2]; totals.wallCpus += wfComp[3];
+          totals.slotOk += wfComp[4]; totals.slotAll += wfComp[5];
+          totals.cpu7 += wfComp[8]; totals.wall7 += wfComp[9];
+          totals.slotOk7 += wfComp[10]; totals.slotAll7 += wfComp[11];
+        } else {
           totals.done += parseInt(row.dataset.done) || 0;
           totals.fail += parseInt(row.dataset.fail) || 0;
-          var rowDone = parseInt(row.dataset.done) || 0;
-          totals.cpu += parseFloat(row.dataset.cpuEff || 0) * rowDone;
-          totals.wallCpus += rowDone;
-          totals.slotOk += parseFloat(row.dataset.procEff || 0) * rowDone;
-          totals.slotAll += rowDone;
         }
       }
     });
@@ -366,15 +383,15 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       el.textContent = rate;
       el.className = 'stat-value' + ((totals.done && totals.fail / totals.done > 0.05) ? ' warn' : '');
     }
-    if ((el = document.getElementById('stat-cpu-eff'))) {
-      var ce = totals.wallCpus ? (totals.cpu / totals.wallCpus * 100).toFixed(1) + '%' : '';
-      el.textContent = ce;
-      el.className = 'stat-value' + ((totals.wallCpus && totals.cpu / totals.wallCpus < 0.5) ? ' warn' : '');
-    }
-    if ((el = document.getElementById('stat-proc-eff'))) {
-      var pe = totals.slotAll ? (totals.slotOk / totals.slotAll * 100).toFixed(1) + '%' : '';
-      el.textContent = pe;
-      el.className = 'stat-value' + ((totals.slotAll && totals.slotOk / totals.slotAll < 0.8) ? ' warn' : '');
+    // Efficiency headline. When a workflow/user filter is active, drive
+    // both windows from the exact per-(entity,site) weights accumulated
+    // above (totals). Otherwise updateHeadlineFromSites (called at the
+    // end) drives them from the visible site rows.
+    if (wfFilter) {
+      setEff('stat-cpu-eff', totals.cpu, totals.wallCpus, 0.5);
+      setEff('stat-proc-eff', totals.slotOk, totals.slotAll, 0.8);
+      setEff('stat-cpu-eff-7d', totals.cpu7, totals.wall7, 0.5);
+      setEff('stat-proc-eff-7d', totals.slotOk7, totals.slotAll7, 0.8);
     }
 
     // 4. Recompute sites from visible workflows
@@ -382,30 +399,35 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
       if (wfFilter && crossRef) {
         // Workflow filter active: recompute site values from visible workflows
         var siteTotals = {};
-        var siteCompTotals = {};  // {site: [done, fail, cpu, wall_cpus, slot_ok, slot_all]}
+        var siteCompTotals = {};  // {site: 12-el [1h..., 7d...]}
         visibleWfs.forEach(function(wf) {
           var sites = crossRef[wf];
-          if (!sites) return;
-          for (var site in sites) {
-            var v = sites[site];
-            var s = siteTotals[site];
-            if (!s) { s = [0,0,0,0]; siteTotals[site] = s; }
-            s[0] += v[0]; s[1] += v[1]; s[2] += v[2]; s[3] += v[3];
+          if (sites) {
+            for (var site in sites) {
+              var v = sites[site];
+              var s = siteTotals[site];
+              if (!s) { s = [0,0,0,0]; siteTotals[site] = s; }
+              s[0] += v[0]; s[1] += v[1]; s[2] += v[2]; s[3] += v[3];
+            }
           }
           var cSites = completionXref ? completionXref[wf] : null;
           if (cSites) {
             for (var site in cSites) {
               var cv = cSites[site];
               var sc = siteCompTotals[site];
-              if (!sc) { sc = [0,0,0,0,0,0]; siteCompTotals[site] = sc; }
-              for (var ci = 0; ci < 6; ci++) sc[ci] += cv[ci] || 0;
+              if (!sc) { sc = [0,0,0,0,0,0,0,0,0,0,0,0]; siteCompTotals[site] = sc; }
+              for (var ci = 0; ci < 12; ci++) sc[ci] += cv[ci] || 0;
             }
           }
         });
         sitesTable.querySelectorAll('tbody tr').forEach(function(row) {
           var site = row.dataset.name;
           var counts = siteTotals[site] || [0,0,0,0];
-          var comp = siteCompTotals[site] || [0,0,0,0,0,0];
+          var comp = siteCompTotals[site] || [0,0,0,0,0,0,0,0,0,0,0,0];
+          // Site table completion columns are all 7d: done7d=comp[6],
+          // fail7d=comp[7], cpu7d=comp[8], wall7d=comp[9],
+          // slotok7d=comp[10], slotall7d=comp[11].
+          var done7 = comp[6], fail7 = comp[7];
           var cells = row.querySelectorAll('td');
           cells[1].textContent = fmt(counts[0]);
           cells[2].textContent = fmt(counts[1]);
@@ -413,20 +435,20 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
           cells[4].textContent = fmt(counts[3]);
           // Restore original UniquePressure
           if (cells[5] && row._origCells) cells[5].innerHTML = row._origCells[5];
-          // Update completion columns
-          if (cells[6]) cells[6].textContent = fmt(comp[0]);
-          if (cells[7]) cells[7].textContent = fmt(comp[1]);
+          // Update completion columns (7d)
+          if (cells[6]) cells[6].textContent = fmt(done7);
+          if (cells[7]) cells[7].textContent = fmt(fail7);
           if (cells[8]) {
-            cells[8].textContent = comp[0] ? (comp[1] / comp[0] * 100).toFixed(1) + '%' : '';
-            cells[8].className = (comp[0] && comp[1] / comp[0] > 0.05) ? 'warn' : '';
+            cells[8].textContent = done7 ? (fail7 / done7 * 100).toFixed(1) + '%' : '';
+            cells[8].className = (done7 && fail7 / done7 > 0.05) ? 'warn' : '';
           }
-          // Efficiency columns
-          var sCpuEff = comp[3] ? comp[2] / comp[3] : 0;
-          var sProcEff = comp[5] ? comp[4] / comp[5] : 0;
-          if (cells[9]) { cells[9].textContent = comp[0] ? (sCpuEff * 100).toFixed(1) + '%' : ''; cells[9].className = sCpuEff && sCpuEff < 0.5 ? 'warn' : ''; }
-          if (cells[10]) { cells[10].textContent = comp[0] ? (sProcEff * 100).toFixed(1) + '%' : ''; cells[10].className = sProcEff && sProcEff < 0.8 ? 'warn' : ''; }
+          // Efficiency columns (7d)
+          var sCpuEff = comp[9] ? comp[8] / comp[9] : 0;
+          var sProcEff = comp[11] ? comp[10] / comp[11] : 0;
+          if (cells[9]) { cells[9].textContent = done7 ? (sCpuEff * 100).toFixed(1) + '%' : ''; cells[9].className = sCpuEff && sCpuEff < 0.5 ? 'warn' : ''; }
+          if (cells[10]) { cells[10].textContent = done7 ? (sProcEff * 100).toFixed(1) + '%' : ''; cells[10].className = sProcEff && sProcEff < 0.8 ? 'warn' : ''; }
           var siteTextMatch = !siteFilter || site.toLowerCase().indexOf(siteFilter) !== -1;
-          var hasData = counts[0] || counts[1] || comp[0];
+          var hasData = counts[0] || counts[1] || done7;
           row.style.display = (siteTextMatch && hasData) ? '' : 'none';
         });
       } else {
@@ -446,11 +468,10 @@ document.querySelectorAll('.data-table.sortable[data-sort-default]').forEach(fun
     resortTable(wfTable);
     resortTable(sitesTable);
 
-    // Refresh the efficiency headline for the visible site set. When a
-    // workflow filter is active, the per-workflow path above already
-    // set the 1h cells from exact per-(workflow,site) weights, so only
-    // drive the 1h row from sites when there's no workflow filter.
-    updateHeadlineFromSites(!wfFilter);
+    // When no workflow filter is active, drive both efficiency rows
+    // from the visible site rows. Under a workflow filter the stats
+    // block above already set them from exact per-(entity,site) weights.
+    if (!wfFilter) updateHeadlineFromSites(true);
   }
 
   if (wfInput) wfInput.addEventListener('input', applyFilters);

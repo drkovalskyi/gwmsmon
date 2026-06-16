@@ -266,6 +266,10 @@ def create_app(config_path="/etc/gwmsmon.conf"):
 
         # For analysisview, group by user (part before first '/')
         if view == "analysisview":
+            # Per-user 7d CPU efficiency from the (user-keyed) completion
+            # cross-reference: Σcpu7d / Σwall7d over the user's sites.
+            # Indices 8,9 are cpu7d, wall_cpus7d (see completion_xref).
+            user_xref = _load_json(basedir, "completion_cross_reference.json")
             users = {}
             for wf_name, subtasks in workflows.items():
                 user = wf_name.split("/", 1)[0]
@@ -273,8 +277,16 @@ def create_app(config_path="/etc/gwmsmon.conf"):
                     users[user] = {"Running": 0, "MatchingIdle": 0,
                                    "CpusInUse": 0, "CpusPending": 0}
                 for st_data in subtasks.values():
-                    for k in users[user]:
+                    for k in ("Running", "MatchingIdle",
+                              "CpusInUse", "CpusPending"):
                         users[user][k] += st_data.get(k, 0)
+            for user, u in users.items():
+                cpu7d = wall7d = 0
+                for site_vals in (user_xref.get(user) or {}).values():
+                    if len(site_vals) >= 10:
+                        cpu7d += site_vals[8]
+                        wall7d += site_vals[9]
+                u["CPUEff7d"] = round(cpu7d / wall7d, 4) if wall7d else None
             sorted_wf = sorted(
                 users.items(),
                 key=lambda x: (-x[1]["Running"], -x[1]["MatchingIdle"]),

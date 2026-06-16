@@ -149,6 +149,8 @@
         <th data-sort="num">Fail %</th>
         <th data-sort="num">CPU Eff</th>
         <th data-sort="num">Proc Eff</th>
+        {% elif view == 'analysisview' %}
+        <th data-sort="num">CPU Eff (7d)</th>
         {% endif %}
       </tr>
     </thead>
@@ -156,12 +158,13 @@
     {% if entity_url_prefix == 'user' %}
     {# analysisview: rows are pre-aggregated user dicts #}
     {% for name, counts in workflows %}
-    <tr data-name="{{ name }}" data-running="{{ counts.get('Running', 0) }}" data-idle="{{ counts.get('MatchingIdle', 0) }}" data-cpus-use="{{ counts.get('CpusInUse', 0) }}" data-cpus-pend="{{ counts.get('CpusPending', 0) }}">
+    <tr data-name="{{ name }}" data-running="{{ counts.get('Running', 0) }}" data-idle="{{ counts.get('MatchingIdle', 0) }}" data-cpus-use="{{ counts.get('CpusInUse', 0) }}" data-cpus-pend="{{ counts.get('CpusPending', 0) }}" data-cpu-eff="{{ counts.get('CPUEff7d') or 0 }}">
       <td><a href="/{{ view }}/user/{{ name }}">{{ name }}</a></td>
       <td>{{ counts.get('Running', 0)|fmt }}</td>
       <td>{{ counts.get('MatchingIdle', 0)|fmt }}</td>
       <td>{{ counts.get('CpusInUse', 0)|fmt }}</td>
       <td>{{ counts.get('CpusPending', 0)|fmt }}</td>
+      <td class="{% if counts.get('CPUEff7d') is not none and counts.CPUEff7d < 0.5 %}warn{% endif %}">{% if counts.get('CPUEff7d') is not none %}{{ (counts.CPUEff7d * 100)|round(1) }}%{% endif %}</td>
     </tr>
     {% endfor %}
     {% elif view == 'globalview' %}

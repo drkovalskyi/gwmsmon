@@ -71,3 +71,32 @@ def test_headline_excludes_unknown_and_emits_weights(tmp_path):
     mit_1h = sec["sites"]["T2_US_MIT"]["efficiency"]["1h"]
     assert mit_1h["cpu"] == 800
     assert mit_1h["wall_cpus"] == 1000
+
+
+def test_completion_xref_keyed_by_user_with_7d_weights(tmp_path):
+    """analysisview completion_cross_reference is keyed by user (not
+    user/task) and each (user, site) entry carries 1h + 7d weights, so
+    the JS can re-weight the headline when filtering by user. The
+    no-site bucket never appears."""
+    s = State()
+    s.updated = int(time.time())
+    minute = int(time.time()) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET - EXIT_CODE_BUCKET
+    _seed(s, minute)
+    cfg = _make_cfg(tmp_path)
+
+    s._flush_one_view(cfg, "analysisview")
+
+    xref = json.loads(
+        (tmp_path / "analysisview" / "completion_cross_reference.json")
+        .read_text())
+    # Keyed by user "alice", not "alice/alice_crab_task1".
+    assert "alice" in xref
+    assert "alice/alice_crab_task1" not in xref
+    # No-site bucket excluded.
+    assert "Unknown" not in xref["alice"]
+    vals = xref["alice"]["T2_US_MIT"]
+    assert len(vals) == 12
+    # 1h block: done, fail, cpu, wall, slot_ok, slot_all
+    assert vals[:6] == [8, 0, 800, 1000, 900, 1000]
+    # 7d block mirrors it (single recent bucket is in both windows)
+    assert vals[6:] == [8, 0, 800, 1000, 900, 1000]

@@ -1236,10 +1236,18 @@ class State:
             # Only vanilla-universe payload jobs (mirrors the live-job
             # gate at universe != 5). Scheduler-universe (7) DAGMan
             # bootstraps and local-universe (12) CRAB service jobs run
-            # on the schedd with no CMS site and ~0 CPU but large wall
-            # time; counting them buried real CPU efficiency under an
-            # "Unknown" site bucket and double-counted task completions.
+            # on the schedd, not at a site; their data belongs only to
+            # the schedd view, never to site/efficiency calculations.
             if job.get("JobUniverse") != 5:
+                continue
+            # Require a real CMS site. Jobs with no resolved
+            # MATCH_GLIDEIN_CMSSite (None/""/"Unknown"/"unknown") are
+            # not attributable to any site and must not enter exit-code
+            # or efficiency aggregation — that "Unknown" bucket once
+            # held mostly schedd-side service jobs and crushed the
+            # wall-weighted CPU-efficiency headline.
+            site = job.get("MATCH_GLIDEIN_CMSSite")
+            if not site or site in ("Unknown", "unknown"):
                 continue
             raw_exit = job.get("ExitCode")
             if raw_exit is None:
@@ -1250,7 +1258,6 @@ class State:
             minute = int(completion) // EXIT_CODE_BUCKET * EXIT_CODE_BUCKET
             schedd_type = job.get("_schedd_type", "unknown")
             schedd_name = job.get("_schedd", "unknown")
-            site = job.get("MATCH_GLIDEIN_CMSSite", "unknown")
             count += 1
 
             # prodview: jobs with WMAgent_RequestName

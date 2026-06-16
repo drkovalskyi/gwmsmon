@@ -1,13 +1,18 @@
-"""update_exit_codes must count only vanilla-universe payload jobs.
+"""update_exit_codes must count only real-site, vanilla-universe payload.
 
-Scheduler-universe (7) DAGMan bootstraps and local-universe (12) CRAB
-service jobs run on the schedd with no CMS site and ~0 CPU but large
-wall time. Counting them buried analysisview CPU efficiency under an
-"Unknown" site bucket and double-counted task completions. The history
-path now mirrors the live-job gate (JobUniverse != 5 -> skip).
+Two gates protect site/efficiency aggregation:
+- JobUniverse != 5 -> skip. Scheduler-universe (7) DAGMan bootstraps
+  and local-universe (12) CRAB service jobs run on the schedd, not a
+  site; their data belongs only to the schedd view.
+- no resolved MATCH_GLIDEIN_CMSSite -> skip. Jobs with site
+  None/""/"Unknown"/"unknown" are not attributable to a site and must
+  never enter the "Unknown" bucket that once crushed the wall-weighted
+  CPU-efficiency headline.
 """
 
 import time
+
+import pytest
 
 from gwmsmon.state import State
 
@@ -70,3 +75,26 @@ def test_mixed_batch_keeps_only_vanilla():
     bucket = next(iter(eff["T2_US_MIT"].values()))
     assert bucket["cpu"] == 3600
     assert bucket["wall_cpus"] == 3600
+
+
+@pytest.mark.parametrize("nosite", [None, "", "Unknown", "unknown"])
+def test_vanilla_job_without_site_skipped(nosite):
+    s = State()
+    s.update_exit_codes([_hist_job(5, MATCH_GLIDEIN_CMSSite=nosite)])
+    assert s.exit_codes.get("analysisview", {}) == {}
+    assert s.efficiency_by_site.get("analysisview", {}) == {}
+
+
+def test_no_unknown_bucket_ever_created():
+    s = State()
+    s.update_exit_codes([
+        _hist_job(5, MATCH_GLIDEIN_CMSSite="T2_US_MIT"),
+        _hist_job(5, MATCH_GLIDEIN_CMSSite="Unknown",
+                  RemoteUserCpu=0, RemoteWallClockTime=50000),
+        _hist_job(5, MATCH_GLIDEIN_CMSSite="unknown",
+                  RemoteUserCpu=0, RemoteWallClockTime=50000),
+    ])
+    all_sites = set()
+    for wfs in s.efficiency_by_site.get("analysisview", {}).values():
+        all_sites.update(wfs.keys())
+    assert all_sites == {"T2_US_MIT"}

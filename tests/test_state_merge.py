@@ -26,6 +26,18 @@ def test_parse_desired_sites_string_with_whitespace():
     ) == ["T1_DE_KIT", "T2_CH_CERN", "T2_US_MIT"]
 
 
+def test_parse_desired_sites_list_repr_string():
+    """Some jobs carry DESIRED_Sites as a Python-list-repr string;
+    brackets/quotes must be stripped so we don't emit names like
+    "['T1_US_FNAL'" (surfaced as bogus rows in the Sites table)."""
+    assert _parse_desired_sites(
+        "['T1_US_FNAL', 'T2_CH_CERN']"
+    ) == ["T1_US_FNAL", "T2_CH_CERN"]
+    assert _parse_desired_sites(
+        '["T1_US_FNAL","T2_CH_CERN"]'
+    ) == ["T1_US_FNAL", "T2_CH_CERN"]
+
+
 def test_parse_desired_sites_list():
     assert _parse_desired_sites(
         ["T1_DE_KIT", "T2_CH_CERN", "T2_US_MIT"]

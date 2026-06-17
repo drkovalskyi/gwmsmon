@@ -172,18 +172,24 @@ _ZERO_TEMPLATE = {k: 0 for k in _ZERO_KEYS}
 def _parse_desired_sites(value):
     """Coerce a DESIRED_Sites classad value to a list of site names.
 
-    Both shapes appear in production:
+    Three shapes appear in production:
     - comma-separated string: "T1_DE_KIT,T2_CH_CERN, T2_US_MIT"
     - Python list: ["T1_DE_KIT", "T2_CH_CERN", "T2_US_MIT"]
       (a classad list field, already converted by classad_to_python)
+    - a list-repr STRING: "['T1_US_FNAL', 'T2_CH_CERN']" — some jobs
+      carry DESIRED_Sites this way. Splitting it on commas naively
+      yields site names like "['T1_US_FNAL'", which then surface as
+      bogus rows in the Sites table. Strip the brackets/quotes/spaces
+      off each token so all three shapes normalise to clean names.
     """
     if not value:
         return []
     if isinstance(value, str):
-        return [s.strip() for s in value.split(",") if s.strip()]
+        return [t for t in (s.strip("[]'\" ") for s in value.split(","))
+                if t]
     if isinstance(value, list):
-        return [s.strip() for s in value
-                if isinstance(s, str) and s.strip()]
+        return [t for t in (s.strip("[]'\" ") for s in value
+                            if isinstance(s, str)) if t]
     return []
 
 
